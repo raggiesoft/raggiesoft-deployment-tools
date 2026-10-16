@@ -96,8 +96,15 @@ write_files:
           # Asset caching and hotlink protection
           location ~* \.(gif|png|jpe?g|svg|webp|ico)$ {
               valid_referers none blocked server_names 
-                             *.raggiesoft.com raggiesoft.com 
+                             *.raggiesoft.com
+                             *.michaelpragsdale.com michaelpragsdale.com
                              *.engineroom-records.com engineroom-records.com
+                             *.thestardustengine.com thestardustengine.com
+                             *.fracturedprisms.com fracturedprisms.com
+                             *.aethelsaga.com aethelsaga.com
+                             *.raggiesoftknox.com raggiesoftknox.com
+                             *.raggiesoftmedia.com raggiesoftmedia.com
+                             *.stardustenginecms.com stardustenginecms.com
                              ~*\.google\. ~*\.bing\. ~*\.yahoo\. ~*\.duckduckgo\. ~*\.yandex\.
                              ~*\.ask\. ~*\.lycos\. ~*\.altavista\.;
               if ($invalid_referer) {
