@@ -775,25 +775,32 @@ echo "👱‍♀️ JENNA: Compiling Narratives & Books..."
         fi
 
         if [ -d "$PORTFOLIO_ROOT/.git" ]; then
-            git add .
+            if git remote get-url origin &>/dev/null; then
+                git fetch origin main 2>/dev/null || true
+                if git rev-parse --verify origin/main &>/dev/null && ! git merge-base origin/main HEAD &>/dev/null; then
+                    echo "      > Grafting Angular 19 Portfolio Dossier onto historical origin/main..."
+                    git reset --soft origin/main
+                fi
+            fi
+            git add -A
 
             if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
                 git commit -m "$COMMIT_MSG"
                 if git remote get-url origin &>/dev/null; then
-                    git push $FORCE_FLAG origin main
+                    git push -u $FORCE_FLAG origin main
                     echo "      ✓ Portfolio Dossier committed and sent to GitHub."
                 else
                     echo "      ✓ Portfolio Dossier committed locally (awaiting GitHub 'origin' remote)."
                 fi
-            elif git remote get-url origin &>/dev/null && [ "$(git log origin/main..HEAD 2>/dev/null)" ]; then
+            elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
                 echo "      ⚠️  Found pending Portfolio commits. Pushing now..."
-                git push $FORCE_FLAG origin main
+                git push -u $FORCE_FLAG origin main
                 echo "      ✓ Pending Portfolio code sent to GitHub."
             else
                 echo "      (Portfolio Dossier is clean and up to date.)"
                 if [ -n "$FORCE_FLAG" ] && git remote get-url origin &>/dev/null; then
                     echo "      ⚠️  Force pushing anyway..."
-                    git push $FORCE_FLAG origin main
+                    git push -u $FORCE_FLAG origin main
                 fi
             fi
 
@@ -816,14 +823,14 @@ echo "👱‍♀️ JENNA: Compiling Narratives & Books..."
         if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
             git commit -m "$COMMIT_MSG"
             if git remote get-url origin &>/dev/null; then
-                git push $FORCE_FLAG origin main
+                git push -u $FORCE_FLAG origin main
                 echo "      ✓ Deployment Tools committed and sent to GitHub."
             else
                 echo "      ✓ Deployment Tools committed locally (awaiting GitHub 'origin' remote)."
             fi
-        elif git remote get-url origin &>/dev/null && [ "$(git log origin/main..HEAD 2>/dev/null)" ]; then
+        elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
             echo "      ⚠️  Found pending Deployment Tools commits. Pushing now..."
-            git push $FORCE_FLAG origin main
+            git push -u $FORCE_FLAG origin main
             echo "      ✓ Pending Deployment Tools sent to GitHub."
         else
             echo "      (Deployment Tools are clean and up to date.)"
@@ -839,14 +846,14 @@ echo "👱‍♀️ JENNA: Compiling Narratives & Books..."
         if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
             git commit -m "$COMMIT_MSG"
             if git remote get-url origin &>/dev/null; then
-                git push $FORCE_FLAG origin main
+                git push -u $FORCE_FLAG origin main
                 echo "      ✓ Nginx Configs committed and sent to GitHub."
             else
                 echo "      ✓ Nginx Configs committed locally (awaiting GitHub 'origin' remote)."
             fi
-        elif git remote get-url origin &>/dev/null && [ "$(git log origin/main..HEAD 2>/dev/null)" ]; then
+        elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
             echo "      ⚠️  Found pending Nginx Config commits. Pushing now..."
-            git push $FORCE_FLAG origin main
+            git push -u $FORCE_FLAG origin main
             echo "      ✓ Pending Nginx Configs sent to GitHub."
         else
             echo "      (Nginx Configs are clean and up to date.)"

@@ -122,6 +122,56 @@ function deploy_site() {
     echo "✅ SARAH: $SITE_NAME Deployment Complete."
 }
 
+# Helper function to keep non-webroot infrastructure repositories (nginx-config,
+# raggiesoft-deployment-tools) synchronized with GitHub on the Droplet.
+function sync_infra_repo() {
+    local REPO_LABEL=$1
+    local REPO_DIR=$2
+
+    local JUST_CLONED=false
+    if [ ! -d "$REPO_DIR" ]; then
+        echo "⚠️ SARAH: Infrastructure repository missing at $REPO_DIR. Cloning from GitHub..."
+        local REPO_BASENAME=$(basename "$REPO_DIR")
+        cd "$(dirname "$REPO_DIR")" || return
+        git clone "https://github.com/raggiesoft/$REPO_BASENAME.git"
+        if [ ! -d "$REPO_DIR" ]; then
+            echo "🚨 SARAH: Clone failed for $REPO_LABEL."
+            return
+        fi
+        JUST_CLONED=true
+    fi
+
+    cd "$REPO_DIR" || return
+    git fetch origin main
+
+    LOCAL=$(git rev-parse HEAD)
+    REMOTE=$(git rev-parse origin/main)
+
+    if [ "$FORCE_RESET" = false ] && [ "$JUST_CLONED" = false ]; then
+        if [ "$LOCAL" == "$REMOTE" ]; then
+            return
+        fi
+        echo "👩‍💼 SARAH: Change detected in $REPO_LABEL! Pulling infrastructure updates."
+    else
+        echo "👩‍💼 SARAH: Synchronizing $REPO_LABEL infrastructure repository."
+    fi
+
+    git reset --hard origin/main
+    if [ "$FORCE_RESET" = true ]; then
+        git clean -fdx
+    fi
+
+    # Standardize permissions (755 for directories and .sh scripts, 644 for config files)
+    find "$REPO_DIR" -path "$REPO_DIR/.git" -prune -o -type d -exec chmod 755 {} +
+    find "$REPO_DIR" -path "$REPO_DIR/.git" -prune -o -type f -exec chmod 644 {} +
+    find "$REPO_DIR" -path "$REPO_DIR/.git" -prune -o -type f -name "*.sh" -exec chmod 755 {} +
+    echo "✅ SARAH: $REPO_LABEL Sync Complete."
+}
+
+# 0. PROCESS INFRASTRUCTURE & DEPLOYMENT REPOSITORIES
+sync_infra_repo "Deployment Tools" "/home/michael/raggiesoft-deployment-tools"
+sync_infra_repo "Nginx Config" "/home/michael/nginx-config"
+
 # 1. PROCESS RAGGIESOFT HUB
 deploy_site "Hub" "/home/michael/raggiesoft-hub" "/var/www/raggiesoft.com"
 
@@ -142,4 +192,5 @@ deploy_site "Music" "/home/michael/raggiesoft-music" "/var/www/music.raggiesoft.
 # 6. PROCESS EXECUTIVE SYSTEMS ARCHITECT DOSSIER (PORTFOLIO - michaelpragsdale.com)
 # Syncs the pre-compiled Angular 19 Zoneless browser bundle into /var/www/michaelpragsdale.com
 deploy_site "Portfolio" "/home/michael/raggiesoft-portfolio" "/var/www/michaelpragsdale.com" "/home/michael/raggiesoft-portfolio/dist/raggiesoft-portfolio/browser"
+
 
