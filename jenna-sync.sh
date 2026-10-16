@@ -278,7 +278,7 @@ function generate_sitemap() {
                         \$json = json_decode(\$jsonContent, true);
                         if (json_last_error() === JSON_ERROR_NONE && is_array(\$json)) {
                             foreach (\$json as \$route => \$config) {
-                                if (\$route !== 'common' && strpos(\$route, '/') === 0) {
+                                if (\$route !== 'common' && strpos(\$route, '/') === 0 && empty(\$config['redirect'])) {
                                     \$urls[] = 'https://raggiesoft.com' . \$route;
                                 }
                             }
