@@ -1,0 +1,43 @@
+# =============================================================================
+# File: .gitignore
+# Repository: raggiesoft-deployment-tools
+# Purpose: Prevents sensitive credentials (rclone.conf, GA4 keys), local Python
+#          virtual environments, binary build tools, and temporary audit logs
+#          from ever being committed to version control.
+# =============================================================================
+
+# --- OS & Editor Files ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+.svelte-kit/
+
+# --- Security & Cloud Credentials (CRITICAL) ---
+build-tools/rclone/rclone.conf
+build-tools/ssh_keys.txt
+!build-tools/rclone/rclone.conf.example
+ga4-credentials.json
+*_credentials*.json
+*service-account*.json
+*.pem
+*.key
+.env*
+
+# --- Local Binary Toolchains & Logs ---
+build-tools/
+!build-tools/rclone/rclone.conf.example
+logs/
+chloe/
+temp_*.jsonl
+temp_*.txt
+
+# --- Legacy Manuscript Staging & Upscayl Outputs ---
+books/
+*[Uu]pscayl*/
+*upscayl*.png
+
+# --- Python Virtual Environment ---
+.venv/
+__pycache__/
