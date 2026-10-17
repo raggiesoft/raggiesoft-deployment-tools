@@ -132,9 +132,9 @@ jq -n -c \
 # ------------------------------------------------------------------------------
 # 3. Master Audio Verification & BWF Stamping
 # ------------------------------------------------------------------------------
-MASTER_DIR="../master-wav" 
+MASTER_DIR="${MASTER_WAV_DIR:-$VAULTS_ROOT/$ARTIST_SLUG/master-wav}"
 SOURCE_WAV="$MASTER_DIR/$MASTER_WAV_PATH.wav"
-LOCAL_WAV="vault/wav/$FILE_BASE.wav"
+LOCAL_WAV="${ALBUM_VAULT_DIR:-vault}/wav/$FILE_BASE.wav"
 RUNTIME=""
 
 if [ ! -f "$SOURCE_WAV" ]; then 
@@ -147,7 +147,7 @@ else
         if [ "$METADATA_ONLY" = false ]; then
         if [ ! -f "$LOCAL_WAV" ] || [ "$OVERWRITE" = true ]; then
             echo "         -> 💾 Stamping BWF Metadata and pulling $MASTER_WAV_PATH to $LOCAL_WAV..."
-            mkdir -p vault/wav
+            mkdir -p "${ALBUM_VAULT_DIR:-vault}/wav"
             
             # Replaces the standard cp command with a lossless FFmpeg metadata pass
             # Stuffs metadata directly into the RIFF INFO and BEXT chunks of the WAV

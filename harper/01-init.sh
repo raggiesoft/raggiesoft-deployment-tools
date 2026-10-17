@@ -18,12 +18,14 @@
 # Define the root path for artist records and metadata (resolved from /raggiesoft-deployment-tools)
 SEARCH_PATH="../raggiesoft-assets/engine-room-records/artists"
 METADATA_FILE="../raggiesoft-assets/engine-room-records/artists/metadata.json"
+export VAULTS_ROOT="$ROOT_DIR/../raggiesoft-vaults/engine-room-records/artists"
 
 # Temporary indices used for fast writes during parallel processing
 TEMP_SEARCH_INDEX="temp_search_index.jsonl" 
 TEMP_CATALOG_INDEX="temp_catalog_index.jsonl" 
 
 echo "   🎚️  Targeting Studio Archives: $SEARCH_PATH"
+echo "   🔐 Targeting Local Master Vaults: $VAULTS_ROOT"
 
 # Initialize Indices by truncating/creating them
 > "$TEMP_SEARCH_INDEX" 

@@ -193,4 +193,19 @@ deploy_site "Music" "/home/michael/raggiesoft-music" "/var/www/music.raggiesoft.
 # Syncs the pre-compiled Angular 19 Zoneless browser bundle into /var/www/michaelpragsdale.com
 deploy_site "Portfolio" "/home/michael/raggiesoft-portfolio" "/var/www/michaelpragsdale.com" "/home/michael/raggiesoft-portfolio/dist/raggiesoft-portfolio/browser"
 
+# 7. PROCESS ENGINE ROOM RECORDS IMPRINT (engineroom.raggiesoft.com)
+# Syncs the pre-compiled Astro 6 static bundle (/dist) into /var/www/engineroom.raggiesoft.com
+deploy_site "Engine Room Records" "/home/michael/raggiesoft-engine-room-records" "/var/www/engineroom.raggiesoft.com" "/home/michael/raggiesoft-engine-room-records/dist"
+
+# 8. PROCESS THE STARDUST ENGINE (stardust.raggiesoft.com)
+# Syncs the pre-compiled Nuxt 4 + Vue 3 static bundle (/.output/public) into /var/www/stardust.raggiesoft.com
+deploy_site "The Stardust Engine" "/home/michael/raggiesoft-stardust-engine" "/var/www/stardust.raggiesoft.com" "/home/michael/raggiesoft-stardust-engine/.output/public"
+
+# 9. PROCESS RAGGIESOFT MEDIA CORPORATE HUB (corporate.raggiesoft.com)
+# Syncs the pre-compiled Bootstrap 5.3.8 static bundle (/dist) into /var/www/corporate.raggiesoft.com
+deploy_site "RaggieSoft Media" "/home/michael/raggiesoft-corporate" "/var/www/corporate.raggiesoft.com" "/home/michael/raggiesoft-corporate/dist"
+
+# 10. PROCESS RAGGIESOFT STORETRAINER (storetrainer.raggiesoft.com)
+# Syncs the pre-compiled Vanilla TypeScript + Classic Win32/Netscape 4.78 static bundle (/dist) into /var/www/storetrainer.raggiesoft.com
+deploy_site "StoreTrainer" "/home/michael/raggiesoft-storetrainer" "/var/www/storetrainer.raggiesoft.com" "/home/michael/raggiesoft-storetrainer/dist"
 

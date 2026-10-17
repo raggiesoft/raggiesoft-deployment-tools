@@ -78,7 +78,7 @@ cd "$ROOT_DEV_DIR" || exit
 
 # Added *.md to the fetch list
 # Uses `find` with pruning to exclude large/binary dirs, fetching only allowed extensions
-find . -type d \( -name ".git" -o -name "node_modules" -o -name "vendor" -o -name "chloe" -o -name "wav" -o -name "mp3" -o -name "ogg" -o -name "archives" -o -name "obj" -o -name "bin" -o -name "_sysops" \) -prune \
+find . -type d \( -name ".git" -o -name "node_modules" -o -name "vendor" -o -name "chloe" -o -name "raggiesoft-vaults" -o -name "wav" -o -name "mp3" -o -name "ogg" -o -name "archives" -o -name "obj" -o -name "bin" -o -name "_sysops" \) -prune \
     -o -type f \( -name "*.php" -o -name "*.json" -o -name "*.js" -o -name "*.css" -o -name "*.conf" -o -name "*.md" \) -print | while read -r file; do
     
     # Extract file path components for analysis
@@ -100,8 +100,14 @@ find . -type d \( -name ".git" -o -name "node_modules" -o -name "vendor" -o -nam
         CLEAN_PATH="${REL_PATH#*raggiesoft-assets/}"
         LIVE_URL="https://assets.raggiesoft.com/${CLEAN_PATH}"
         
-    elif [[ "$REL_PATH" == *"raggiesoft-hub/"* ]]; then
-        CLEAN_PATH="${REL_PATH#*raggiesoft-hub/}"
+    elif [[ "$REL_PATH" == *"raggiesoft.com/www/"* ]] || [[ "$REL_PATH" == *"raggiesoft-hub/"* ]]; then
+        if [[ "$REL_PATH" == *"raggiesoft.com/www/"* ]]; then
+            CLEAN_PATH="${REL_PATH#*raggiesoft.com/www/}"
+            HUB_REL_DIR="raggiesoft.com/www"
+        else
+            CLEAN_PATH="${REL_PATH#*raggiesoft-hub/}"
+            HUB_REL_DIR="raggiesoft-hub"
+        fi
         
         if [[ "$CLEAN_PATH" == "pages/"* ]]; then
             # Rule 2: Pages Routing
@@ -111,7 +117,7 @@ find . -type d \( -name ".git" -o -name "node_modules" -o -name "vendor" -o -nam
             
             # Route Manifest Check
             # Look up route definition in data/routes directory
-            ROUTES_DIR="raggiesoft-hub/data/routes"
+            ROUTES_DIR="$HUB_REL_DIR/data/routes"
             if [ -d "$ROUTES_DIR" ]; then
                 MATCHING_JSON=$(grep -rl "$PAGE_PATH" "$ROUTES_DIR" 2>/dev/null | head -n 1)
                 if [ -n "$MATCHING_JSON" ]; then
@@ -148,7 +154,7 @@ find . -type d \( -name ".git" -o -name "node_modules" -o -name "vendor" -o -nam
             
             # ORPHAN PAGE DETECTION
             # Search component views to determine if the page is actually reachable
-            COMPONENTS_DIR="raggiesoft-hub/includes/components"
+            COMPONENTS_DIR="$HUB_REL_DIR/includes/components"
             if [ -d "$COMPONENTS_DIR" ]; then
                 if [ "$LOCAL_URL_PATH" == "/" ]; then
                     MATCHING_NAV=$(grep -rlE "href=[\"']\/[\"']" "$COMPONENTS_DIR" 2>/dev/null | head -n 1)

@@ -17,14 +17,17 @@
 
 # Proceed with archiving only if 7-zip was located and we aren't doing metadata-only
 if [ "$USE_SEVEN_ZIP" = true ] && [ "$METADATA_ONLY" = false ]; then
-    # Define standard target paths for archive variations
-    ZIP_MP3="vault/archives/${ARCHIVE_BASE_NAME}-mp3.zip"
-    ZIP_OGG="vault/archives/${ARCHIVE_BASE_NAME}-ogg.zip"
-    ZIP_WAV="vault/archives/${ARCHIVE_BASE_NAME}-wav.7z"
-    ZIP_FLAC="vault/archives/${ARCHIVE_BASE_NAME}-flac.7z"
-    ZIP_STANDARD="vault/archives/${ARCHIVE_BASE_NAME}-standard-archive.zip"
+    VAULT_TARGET="${ALBUM_VAULT_DIR:-vault}"
+    mkdir -p "$VAULT_TARGET/archives"
 
-    echo "      🎙️  HARPER: Booting up the Archiver. Securing files into the Vault..."
+    # Define standard target paths for archive variations in the local Vault
+    ZIP_MP3="$VAULT_TARGET/archives/${ARCHIVE_BASE_NAME}-mp3.zip"
+    ZIP_OGG="$VAULT_TARGET/archives/${ARCHIVE_BASE_NAME}-ogg.zip"
+    ZIP_WAV="$VAULT_TARGET/archives/${ARCHIVE_BASE_NAME}-wav.7z"
+    ZIP_FLAC="$VAULT_TARGET/archives/${ARCHIVE_BASE_NAME}-flac.7z"
+    ZIP_STANDARD="$VAULT_TARGET/archives/${ARCHIVE_BASE_NAME}-standard-archive.zip"
+
+    echo "      🎙️  HARPER: Booting up the Archiver. Securing files into the Vault ($VAULT_TARGET)..."
 
     # --------------------------------------------------------------------------
     # 1. Premium MP3 Archive
@@ -32,25 +35,25 @@ if [ "$USE_SEVEN_ZIP" = true ] && [ "$METADATA_ONLY" = false ]; then
     if [ ! -f "$ZIP_MP3" ] || [ "$OVERWRITE" = true ]; then
         echo "         -> 📦 Packing Premium MP3 Archive..."
         rm -f "$ZIP_MP3"
-        mkdir -p vault/archives/staging_mp3/lyrics
-        mkdir -p vault/archives/staging_mp3/metadata
+        mkdir -p "$VAULT_TARGET/archives/staging_mp3/lyrics"
+        mkdir -p "$VAULT_TARGET/archives/staging_mp3/metadata"
         
         # Stage necessary assets (audio, metadata, artwork, lyrics)
-        cp vault/mp3/*.mp3 vault/archives/staging_mp3/ 2>/dev/null
-        cp streaming-services/song-metadata/*.md vault/archives/staging_mp3/metadata/ 2>/dev/null
-        cp "$README_FILE" vault/archives/staging_mp3/
-        [ -f "$ART_FILE" ] && cp "$ART_FILE" vault/archives/staging_mp3/
+        cp "$VAULT_TARGET/mp3/"*.mp3 "$VAULT_TARGET/archives/staging_mp3/" 2>/dev/null
+        cp streaming-services/song-metadata/*.md "$VAULT_TARGET/archives/staging_mp3/metadata/" 2>/dev/null
+        cp "$README_FILE" "$VAULT_TARGET/archives/staging_mp3/"
+        [ -f "$ART_FILE" ] && cp "$ART_FILE" "$VAULT_TARGET/archives/staging_mp3/"
         
         if [ "$HAS_LYRICS" = true ]; then
-            cp lyrics/*.md vault/archives/staging_mp3/lyrics/ 2>/dev/null
-            [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" vault/archives/staging_mp3/
+            cp lyrics/*.md "$VAULT_TARGET/archives/staging_mp3/lyrics/" 2>/dev/null
+            [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" "$VAULT_TARGET/archives/staging_mp3/"
         fi
         
         # Zip the staged directory and cleanup
-        pushd vault/archives/staging_mp3 
+        pushd "$VAULT_TARGET/archives/staging_mp3" > /dev/null
         "$SEVEN_ZIP_CMD" a -tzip -mx=5 "../${ARCHIVE_BASE_NAME}-mp3.zip" * 
-        popd 
-        rm -rf vault/archives/staging_mp3
+        popd > /dev/null
+        rm -rf "$VAULT_TARGET/archives/staging_mp3"
     else
         echo "         ⏭️  Premium MP3 Archive already exists! Skipping."
     fi
@@ -61,25 +64,25 @@ if [ "$USE_SEVEN_ZIP" = true ] && [ "$METADATA_ONLY" = false ]; then
     if [ ! -f "$ZIP_OGG" ] || [ "$OVERWRITE" = true ]; then
         echo "         -> 📦 Packing Premium OGG Archive..."
         rm -f "$ZIP_OGG"
-        mkdir -p vault/archives/staging_ogg/lyrics
-        mkdir -p vault/archives/staging_ogg/metadata
+        mkdir -p "$VAULT_TARGET/archives/staging_ogg/lyrics"
+        mkdir -p "$VAULT_TARGET/archives/staging_ogg/metadata"
         
         # Stage OGG assets
-        cp vault/ogg/*.ogg vault/archives/staging_ogg/ 2>/dev/null
-        cp streaming-services/song-metadata/*.md vault/archives/staging_ogg/metadata/ 2>/dev/null
-        cp "$README_FILE" vault/archives/staging_ogg/
-        [ -f "$ART_FILE" ] && cp "$ART_FILE" vault/archives/staging_ogg/
+        cp "$VAULT_TARGET/ogg/"*.ogg "$VAULT_TARGET/archives/staging_ogg/" 2>/dev/null
+        cp streaming-services/song-metadata/*.md "$VAULT_TARGET/archives/staging_ogg/metadata/" 2>/dev/null
+        cp "$README_FILE" "$VAULT_TARGET/archives/staging_ogg/"
+        [ -f "$ART_FILE" ] && cp "$ART_FILE" "$VAULT_TARGET/archives/staging_ogg/"
         
         if [ "$HAS_LYRICS" = true ]; then
-            cp lyrics/*.md vault/archives/staging_ogg/lyrics/ 2>/dev/null
-            [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" vault/archives/staging_ogg/
+            cp lyrics/*.md "$VAULT_TARGET/archives/staging_ogg/lyrics/" 2>/dev/null
+            [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" "$VAULT_TARGET/archives/staging_ogg/"
         fi
         
         # Zip the staged directory and cleanup
-        pushd vault/archives/staging_ogg 
+        pushd "$VAULT_TARGET/archives/staging_ogg" > /dev/null
         "$SEVEN_ZIP_CMD" a -tzip -mx=5 "../${ARCHIVE_BASE_NAME}-ogg.zip" * 
-        popd 
-        rm -rf vault/archives/staging_ogg
+        popd > /dev/null
+        rm -rf "$VAULT_TARGET/archives/staging_ogg"
     else
         echo "         ⏭️  Premium OGG Archive already exists! Skipping."
     fi
@@ -90,25 +93,25 @@ if [ "$USE_SEVEN_ZIP" = true ] && [ "$METADATA_ONLY" = false ]; then
     if [ ! -f "$ZIP_WAV" ] || [ "$OVERWRITE" = true ]; then
         echo "         -> 📦 Packing massive WAV Master Archive (Ultra Compression active!)..."
         rm -f "$ZIP_WAV"
-        mkdir -p vault/archives/staging_wav/lyrics
-        mkdir -p vault/archives/staging_wav/metadata
+        mkdir -p "$VAULT_TARGET/archives/staging_wav/lyrics"
+        mkdir -p "$VAULT_TARGET/archives/staging_wav/metadata"
         
         # Stage WAV assets
-        cp vault/wav/*.wav vault/archives/staging_wav/ 2>/dev/null
-        cp streaming-services/song-metadata/*.md vault/archives/staging_wav/metadata/ 2>/dev/null
-        cp "$README_FILE" vault/archives/staging_wav/
-        [ -f "$ART_FILE" ] && cp "$ART_FILE" vault/archives/staging_wav/
+        cp "$VAULT_TARGET/wav/"*.wav "$VAULT_TARGET/archives/staging_wav/" 2>/dev/null
+        cp streaming-services/song-metadata/*.md "$VAULT_TARGET/archives/staging_wav/metadata/" 2>/dev/null
+        cp "$README_FILE" "$VAULT_TARGET/archives/staging_wav/"
+        [ -f "$ART_FILE" ] && cp "$ART_FILE" "$VAULT_TARGET/archives/staging_wav/"
         
         if [ "$HAS_LYRICS" = true ]; then
-            cp lyrics/*.md vault/archives/staging_wav/lyrics/ 2>/dev/null
-            [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" vault/archives/staging_wav/
+            cp lyrics/*.md "$VAULT_TARGET/archives/staging_wav/lyrics/" 2>/dev/null
+            [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" "$VAULT_TARGET/archives/staging_wav/"
         fi
         
         # Use 7z solid archiving with maximum compression (-mx=9) to handle massive uncompressed audio
-        pushd vault/archives/staging_wav 
+        pushd "$VAULT_TARGET/archives/staging_wav" > /dev/null
         "$SEVEN_ZIP_CMD" a -t7z -mx=9 -ms=on "../${ARCHIVE_BASE_NAME}-wav.7z" * 
-        popd 
-        rm -rf vault/archives/staging_wav
+        popd > /dev/null
+        rm -rf "$VAULT_TARGET/archives/staging_wav"
     else
         echo "         ⏭️  WAV Master Archive already exists! Skipping."
     fi
@@ -119,25 +122,25 @@ if [ "$USE_SEVEN_ZIP" = true ] && [ "$METADATA_ONLY" = false ]; then
     if [ ! -f "$ZIP_FLAC" ] || [ "$OVERWRITE" = true ]; then
         echo "         -> 📦 Packing Audiophile FLAC Archive..."
         rm -f "$ZIP_FLAC"
-        mkdir -p vault/archives/staging_flac/lyrics
-        mkdir -p vault/archives/staging_flac/metadata
+        mkdir -p "$VAULT_TARGET/archives/staging_flac/lyrics"
+        mkdir -p "$VAULT_TARGET/archives/staging_flac/metadata"
         
         # Stage FLAC assets
-        cp vault/flac/*.flac vault/archives/staging_flac/ 2>/dev/null
-        cp streaming-services/song-metadata/*.md vault/archives/staging_flac/metadata/ 2>/dev/null
-        cp "$README_FILE" vault/archives/staging_flac/
-        [ -f "$ART_FILE" ] && cp "$ART_FILE" vault/archives/staging_flac/
+        cp "$VAULT_TARGET/flac/"*.flac "$VAULT_TARGET/archives/staging_flac/" 2>/dev/null
+        cp streaming-services/song-metadata/*.md "$VAULT_TARGET/archives/staging_flac/metadata/" 2>/dev/null
+        cp "$README_FILE" "$VAULT_TARGET/archives/staging_flac/"
+        [ -f "$ART_FILE" ] && cp "$ART_FILE" "$VAULT_TARGET/archives/staging_flac/"
         
         if [ "$HAS_LYRICS" = true ]; then
-            cp lyrics/*.md vault/archives/staging_flac/lyrics/ 2>/dev/null
-            [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" vault/archives/staging_flac/
+            cp lyrics/*.md "$VAULT_TARGET/archives/staging_flac/lyrics/" 2>/dev/null
+            [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" "$VAULT_TARGET/archives/staging_flac/"
         fi
         
         # Use 7z solid archiving for maximum efficiency on FLAC files
-        pushd vault/archives/staging_flac 
+        pushd "$VAULT_TARGET/archives/staging_flac" > /dev/null
         "$SEVEN_ZIP_CMD" a -t7z -mx=9 -ms=on "../${ARCHIVE_BASE_NAME}-flac.7z" * 
-        popd 
-        rm -rf vault/archives/staging_flac
+        popd > /dev/null
+        rm -rf "$VAULT_TARGET/archives/staging_flac"
     else
         echo "         ⏭️  Audiophile FLAC Archive already exists! Skipping."
     fi
@@ -148,28 +151,28 @@ if [ "$USE_SEVEN_ZIP" = true ] && [ "$METADATA_ONLY" = false ]; then
     if [ ! -f "$ZIP_STANDARD" ] || [ "$OVERWRITE" = true ]; then
         echo "         -> 📦 Packing the Standard Archive (MP3 & OGG)..."
         rm -f "$ZIP_STANDARD"
-        mkdir -p vault/archives/staging_standard/lyrics
-        mkdir -p vault/archives/staging_standard/metadata
-        mkdir -p vault/archives/staging_standard/mp3
-        mkdir -p vault/archives/staging_standard/ogg
+        mkdir -p "$VAULT_TARGET/archives/staging_standard/lyrics"
+        mkdir -p "$VAULT_TARGET/archives/staging_standard/metadata"
+        mkdir -p "$VAULT_TARGET/archives/staging_standard/mp3"
+        mkdir -p "$VAULT_TARGET/archives/staging_standard/ogg"
         
         # Stage both MP3 and OGG along with shared assets
-        cp vault/mp3/*.mp3 vault/archives/staging_standard/mp3/ 2>/dev/null
-        cp vault/ogg/*.ogg vault/archives/staging_standard/ogg/ 2>/dev/null
+        cp "$VAULT_TARGET/mp3/"*.mp3 "$VAULT_TARGET/archives/staging_standard/mp3/" 2>/dev/null
+        cp "$VAULT_TARGET/ogg/"*.ogg "$VAULT_TARGET/archives/staging_standard/ogg/" 2>/dev/null
         
-        cp streaming-services/song-metadata/*.md vault/archives/staging_standard/metadata/ 2>/dev/null
-        cp "$README_FILE" vault/archives/staging_standard/
-        [ -f "$ART_FILE" ] && cp "$ART_FILE" vault/archives/staging_standard/
+        cp streaming-services/song-metadata/*.md "$VAULT_TARGET/archives/staging_standard/metadata/" 2>/dev/null
+        cp "$README_FILE" "$VAULT_TARGET/archives/staging_standard/"
+        [ -f "$ART_FILE" ] && cp "$ART_FILE" "$VAULT_TARGET/archives/staging_standard/"
         
         if [ "$HAS_LYRICS" = true ]; then
-            cp lyrics/*.md vault/archives/staging_standard/lyrics/ 2>/dev/null
-            [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" vault/archives/staging_standard/
+            cp lyrics/*.md "$VAULT_TARGET/archives/staging_standard/lyrics/" 2>/dev/null
+            [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" "$VAULT_TARGET/archives/staging_standard/"
         fi
         
-        pushd vault/archives/staging_standard 
+        pushd "$VAULT_TARGET/archives/staging_standard" > /dev/null
         "$SEVEN_ZIP_CMD" a -tzip -mx=5 "../${ARCHIVE_BASE_NAME}-standard-archive.zip" * 
-        popd 
-        rm -rf vault/archives/staging_standard
+        popd > /dev/null
+        rm -rf "$VAULT_TARGET/archives/staging_standard"
     else
         echo "         ⏭️  Standard Archive (MP3 & OGG) already exists! Skipping."
     fi

@@ -47,14 +47,18 @@ WORKSPACE_DIR=$(cd "$(dirname "$0")" && pwd)
 SERVER_ROOT=$(cd "$WORKSPACE_DIR/.." && pwd)
 ASSETS_ROOT="$SERVER_ROOT/raggiesoft-assets"
 
-HUB_ROOT="$SERVER_ROOT/raggiesoft-hub"
+HUB_ROOT="$SERVER_ROOT/raggiesoft.com/www"
 CMS_ROOT="$SERVER_ROOT/stardust-engine-cms"
 NARRATIVES_ROOT="$SERVER_ROOT/raggiesoft-narratives"
-NEBULAE_ROOT="$SERVER_ROOT/raggiesoft-nebulae"
-BOOKS_ROOT="$SERVER_ROOT/raggiesoft-book-library"
-LORE_ROOT="$SERVER_ROOT/raggiesoft-lore"
-MUSIC_ROOT="$SERVER_ROOT/raggiesoft-music"
-PORTFOLIO_ROOT="$SERVER_ROOT/raggiesoft-portfolio"
+NEBULAE_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/nebulae"
+BOOKS_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/books"
+LORE_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/lore"
+MUSIC_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/music"
+ENGINEROOM_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/engineroom"
+STARDUST_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/stardust"
+CORPORATE_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/corporate"
+STORETRAINER_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/storetrainer"
+PORTFOLIO_ROOT="$SERVER_ROOT/michaelpragsdale.com/www"
 DEPLOYMENT_TOOLS_ROOT="$SERVER_ROOT/raggiesoft-deployment-tools"
 NGINX_CONFIG_ROOT="$SERVER_ROOT/nginx-config"
 LOGS_DIR="$WORKSPACE_DIR/logs"
@@ -100,7 +104,7 @@ function run_integrity_check() {
     echo "👱‍♀️ JENNA: QA Protocol Initiated..."
     (
         cd "$WORKSPACE_DIR" && php -r "
-            \$hubRoot = realpath('../raggiesoft-hub');
+            \$hubRoot = realpath('../raggiesoft.com/www') ?: realpath('../raggiesoft-hub');
             if (!\$hubRoot || !is_dir(\$hubRoot)) { exit(1); }
             \$hasErrors = false;
             \$pattern = \$hubRoot . '/data/routes/*.json';
@@ -151,7 +155,7 @@ function run_orphan_audit() {
         cd "$WORKSPACE_DIR" && php -r "
             \$timestamp = \$argv[1];
             \$prettyDate = \$argv[2];
-            \$hubRoot = realpath('../raggiesoft-hub');
+            \$hubRoot = realpath('../raggiesoft.com/www') ?: realpath('../raggiesoft-hub');
             \$logsDir = __DIR__ . '/logs'; 
             
             \$definedViews = [];
@@ -258,7 +262,7 @@ function generate_sitemap() {
     echo "👱‍♀️ JENNA: Generating XML Sitemap and robots.txt..."
     (
         cd "$WORKSPACE_DIR" && php -r "
-            \$hubRoot = realpath('../raggiesoft-hub');
+            \$hubRoot = realpath('../raggiesoft.com/www') ?: realpath('../raggiesoft-hub');
             if (!\$hubRoot || !is_dir(\$hubRoot)) {
                 echo '      ❌ ERROR: Could not resolve Hub directory path.' . PHP_EOL;
                 exit(1);
@@ -312,7 +316,7 @@ function do_pull() {
     echo "👱‍♀️ JENNA: On it! Bringing everything down to your machine..."
     echo "          $CONNECTION_MSG"
     
-    echo "   1. Checking the Hub (Code)..."
+    echo "   1. Checking the Hub (raggiesoft.com/www)..."
     if [ -d "$HUB_ROOT" ]; then cd "$HUB_ROOT" && git pull origin main; fi
     
     echo "   2. Checking the Assets (Workspace)..."
@@ -324,45 +328,66 @@ function do_pull() {
     echo "   4. Checking the Narratives..."
     if [ ! -d "$NARRATIVES_ROOT" ]; then
         echo "      > Repository missing. Cloning CC BY-SA 4.0 Narratives from GitHub..."
-        cd "$SERVER_ROOT" && git clone https://github.com/raggiesoft/raggiesoft-narratives.git
+        cd "$SERVER_ROOT" && git clone https://github.com/raggiesoft/raggiesoft-narratives.git "$NARRATIVES_ROOT"
     else
         cd "$NARRATIVES_ROOT" && git pull origin main
     fi
 
-    echo "   5. Checking the Nebulae Incubator..."
+    echo "   5. Checking the Nebulae Incubator (nebulae.raggiesoft.com)..."
     if [ ! -d "$NEBULAE_ROOT" ]; then
         echo "      > Repository missing. Cloning Nebulae from GitHub..."
-        cd "$SERVER_ROOT" && git clone https://github.com/raggiesoft/raggiesoft-nebulae.git
+        mkdir -p "$(dirname "$NEBULAE_ROOT")"
+        git clone https://github.com/raggiesoft/raggiesoft-nebulae.git "$NEBULAE_ROOT"
     else
         cd "$NEBULAE_ROOT" && git pull origin main
+    fi
+
+    echo "   5.4 Checking the Book Library (books.raggiesoft.com)..."
     if [ ! -d "$BOOKS_ROOT" ]; then
         echo "      > Repository missing. Cloning Books from GitHub..."
-        cd "$SERVER_ROOT" && git clone https://github.com/raggiesoft/raggiesoft-book-library.git
+        mkdir -p "$(dirname "$BOOKS_ROOT")"
+        git clone https://github.com/raggiesoft/raggiesoft-book-library.git "$BOOKS_ROOT"
     else
         cd "$BOOKS_ROOT" && git pull origin main
     fi
-    fi
     
-    echo "   5.5 Checking the Lore Graph..."
+    echo "   5.5 Checking the Lore Graph (lore.raggiesoft.com)..."
     if [ ! -d "$LORE_ROOT" ]; then
         echo "      > Repository missing. Cloning Lore from GitHub..."
-        cd "$SERVER_ROOT" && git clone https://github.com/raggiesoft/raggiesoft-lore.git
+        mkdir -p "$(dirname "$LORE_ROOT")"
+        git clone https://github.com/raggiesoft/raggiesoft-lore.git "$LORE_ROOT"
     else
         cd "$LORE_ROOT" && git pull origin main
     fi
 
-    echo "   5.6 Checking Engine Room Records (Music Site)..."
+    echo "   5.6 Checking The Listening Room (music.raggiesoft.com)..."
     if [ ! -d "$MUSIC_ROOT" ]; then
         echo "      > Repository missing. Cloning Music Site from GitHub..."
-        cd "$SERVER_ROOT" && git clone https://github.com/raggiesoft/raggiesoft-music.git
+        mkdir -p "$(dirname "$MUSIC_ROOT")"
+        git clone https://github.com/raggiesoft/raggiesoft-music.git "$MUSIC_ROOT"
     else
         cd "$MUSIC_ROOT" && git pull origin main
     fi
 
-    echo "   5.7 Checking Executive Systems Architect Dossier (michaelpragsdale.com)..."
+    echo "   5.65 Checking Engine Room Records, Stardust Engine, Corporate & StoreTrainer Subdomains..."
+    if [ -d "$ENGINEROOM_ROOT/.git" ] && (cd "$ENGINEROOM_ROOT" && git remote get-url origin &>/dev/null); then
+        cd "$ENGINEROOM_ROOT" && git pull origin main
+    fi
+    if [ -d "$STARDUST_ROOT/.git" ] && (cd "$STARDUST_ROOT" && git remote get-url origin &>/dev/null); then
+        cd "$STARDUST_ROOT" && git pull origin main
+    fi
+    if [ -d "$CORPORATE_ROOT/.git" ] && (cd "$CORPORATE_ROOT" && git remote get-url origin &>/dev/null); then
+        cd "$CORPORATE_ROOT" && git pull origin main
+    fi
+    if [ -d "$STORETRAINER_ROOT/.git" ] && (cd "$STORETRAINER_ROOT" && git remote get-url origin &>/dev/null); then
+        cd "$STORETRAINER_ROOT" && git pull origin main
+    fi
+
+    echo "   5.7 Checking Executive Systems Architect Dossier (michaelpragsdale.com/www)..."
     if [ ! -d "$PORTFOLIO_ROOT" ]; then
         echo "      > Repository missing. Cloning raggiesoft-portfolio from GitHub..."
-        cd "$SERVER_ROOT" && git clone https://github.com/raggiesoft/raggiesoft-portfolio.git 2>/dev/null || true
+        mkdir -p "$(dirname "$PORTFOLIO_ROOT")"
+        git clone https://github.com/raggiesoft/raggiesoft-portfolio.git "$PORTFOLIO_ROOT" 2>/dev/null || true
     elif [ -d "$PORTFOLIO_ROOT/.git" ] && (cd "$PORTFOLIO_ROOT" && git remote get-url origin &>/dev/null); then
         cd "$PORTFOLIO_ROOT" && git pull origin main
     fi
@@ -380,6 +405,8 @@ function do_pull() {
         --config "$RCLONE_CONF" \
         --exclude "/_workspace/**" \
         --exclude "/.git/**" \
+        --exclude "**/vault/**" \
+        --exclude "**/master-wav/**" \
         --exclude ".DS_Store" \
         --exclude "desktop.ini" \
         --exclude "Thumbs.db" \
@@ -453,10 +480,6 @@ function do_push() {
         if [ -d "$BOOKS_ROOT" ]; then
             cp -r "$SERVER_ROOT/components-library/"* "$BOOKS_ROOT/includes/"
             echo "      ✓ Synced components to raggiesoft-book-library"
-        fi
-        if [ -d "$NEBULAE_ROOT" ]; then
-            cp -r "$SERVER_ROOT/components-library/"* "$NEBULAE_ROOT/includes/"
-            echo "      ✓ Synced components to raggiesoft-nebulae"
         fi
     fi
 
@@ -631,10 +654,18 @@ echo "👱‍♀️ JENNA: Compiling Narratives & Books..."
     fi
 
     # 4.7 NEBULAE PUSH
-    echo "   -> Packaging the Nebulae Incubator..."
+    echo "   -> Packaging the Nebulae Cosmic Observatory (nebulae.raggiesoft.com)..."
     if [ -d "$NEBULAE_ROOT" ]; then
         cd "$NEBULAE_ROOT"
-        git add .
+        if [ -f "$NEBULAE_ROOT/package.json" ]; then
+            export PATH="/opt/homebrew/bin:$PATH"
+            npm run build
+            if [ $? -ne 0 ]; then
+                echo "🛑 JENNA: ABORTING! Nebulae Observatory build failed."
+                exit 1
+            fi
+        fi
+        git add -A
         
         if ! git diff-index --quiet HEAD --; then
              git commit -m "$COMMIT_MSG"
@@ -760,6 +791,123 @@ echo "👱‍♀️ JENNA: Compiling Narratives & Books..."
             git push origin "$TAG_NAME"
         fi
     fi
+
+    # 4.95 ENGINE ROOM RECORDS IMPRINT PUSH (engineroom.raggiesoft.com)
+    if [ -d "$ENGINEROOM_ROOT" ] && [ -f "$ENGINEROOM_ROOT/package.json" ]; then
+        echo "   -> Packaging Engine Room Records Imprint (engineroom.raggiesoft.com)..."
+        cd "$ENGINEROOM_ROOT"
+        export PATH="/opt/homebrew/bin:$PATH"
+        npm run build
+        if [ $? -ne 0 ]; then
+            echo "🛑 JENNA: ABORTING! Astro 6 build failed in engineroom.raggiesoft.com."
+            exit 1
+        fi
+        if [ -d "$ENGINEROOM_ROOT/.git" ]; then
+            git add -A
+            if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
+                git commit -m "$COMMIT_MSG"
+                if git remote get-url origin &>/dev/null; then
+                    git push -u $FORCE_FLAG origin main
+                    echo "      ✓ Engine Room Records Imprint committed and sent to GitHub."
+                else
+                    echo "      ✓ Engine Room Records Imprint committed locally (awaiting GitHub 'origin' remote)."
+                fi
+            elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
+                git push -u $FORCE_FLAG origin main
+                echo "      ✓ Pending Engine Room Records Imprint code sent to GitHub."
+            else
+                echo "      (Engine Room Records Imprint is clean and up to date.)"
+            fi
+        fi
+    fi
+
+    # 4.96 THE STARDUST ENGINE PUSH (stardust.raggiesoft.com)
+    if [ -d "$STARDUST_ROOT" ] && [ -f "$STARDUST_ROOT/package.json" ]; then
+        echo "   -> Packaging The Stardust Engine (stardust.raggiesoft.com)..."
+        cd "$STARDUST_ROOT"
+        export PATH="/opt/homebrew/bin:$PATH"
+        npm run build
+        if [ $? -ne 0 ]; then
+            echo "🛑 JENNA: ABORTING! Nuxt 4 build failed in stardust.raggiesoft.com."
+            exit 1
+        fi
+        if [ -d "$STARDUST_ROOT/.git" ]; then
+            git add -A
+            if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
+                git commit -m "$COMMIT_MSG"
+                if git remote get-url origin &>/dev/null; then
+                    git push -u $FORCE_FLAG origin main
+                    echo "      ✓ The Stardust Engine committed and sent to GitHub."
+                else
+                    echo "      ✓ The Stardust Engine committed locally (awaiting GitHub 'origin' remote)."
+                fi
+            elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
+                git push -u $FORCE_FLAG origin main
+                echo "      ✓ Pending The Stardust Engine code sent to GitHub."
+            else
+                echo "      (The Stardust Engine is clean and up to date.)"
+            fi
+        fi
+    fi
+
+    # 4.97 RAGGIESOFT MEDIA CORPORATE HUB PUSH (corporate.raggiesoft.com)
+    if [ -d "$CORPORATE_ROOT" ] && [ -f "$CORPORATE_ROOT/package.json" ]; then
+        echo "   -> Packaging RaggieSoft Media Corporate Hub (corporate.raggiesoft.com)..."
+        cd "$CORPORATE_ROOT"
+        export PATH="/opt/homebrew/bin:$PATH"
+        npm run build
+        if [ $? -ne 0 ]; then
+            echo "🛑 JENNA: ABORTING! Bootstrap 5.3.8 build failed in corporate.raggiesoft.com."
+            exit 1
+        fi
+        if [ -d "$CORPORATE_ROOT/.git" ]; then
+            git add -A
+            if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
+                git commit -m "$COMMIT_MSG"
+                if git remote get-url origin &>/dev/null; then
+                    git push -u $FORCE_FLAG origin main
+                    echo "      ✓ RaggieSoft Media Corporate Hub committed and sent to GitHub."
+                else
+                    echo "      ✓ RaggieSoft Media Corporate Hub committed locally (awaiting GitHub 'origin' remote)."
+                fi
+            elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
+                git push -u $FORCE_FLAG origin main
+                echo "      ✓ Pending RaggieSoft Media Corporate Hub code sent to GitHub."
+            else
+                echo "      (RaggieSoft Media Corporate Hub is clean and up to date.)"
+            fi
+        fi
+    fi
+
+    # 4.98 RAGGIESOFT STORETRAINER PUSH (storetrainer.raggiesoft.com)
+    if [ -d "$STORETRAINER_ROOT" ] && [ -f "$STORETRAINER_ROOT/package.json" ]; then
+        echo "   -> Packaging RaggieSoft StoreTrainer (storetrainer.raggiesoft.com)..."
+        cd "$STORETRAINER_ROOT"
+        export PATH="/opt/homebrew/bin:$PATH"
+        npm run build
+        if [ $? -ne 0 ]; then
+            echo "🛑 JENNA: ABORTING! Vanilla TypeScript build failed in storetrainer.raggiesoft.com."
+            exit 1
+        fi
+        if [ -d "$STORETRAINER_ROOT/.git" ]; then
+            git add -A
+            if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
+                git commit -m "$COMMIT_MSG"
+                if git remote get-url origin &>/dev/null; then
+                    git push -u $FORCE_FLAG origin main
+                    echo "      ✓ RaggieSoft StoreTrainer committed and sent to GitHub."
+                else
+                    echo "      ✓ RaggieSoft StoreTrainer committed locally (awaiting GitHub 'origin' remote)."
+                fi
+            elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
+                git push -u $FORCE_FLAG origin main
+                echo "      ✓ Pending RaggieSoft StoreTrainer code sent to GitHub."
+            else
+                echo "      (RaggieSoft StoreTrainer is clean and up to date.)"
+            fi
+        fi
+    fi
+
 
     # 4.10 PORTFOLIO PUSH (Executive Systems Architect Dossier - michaelpragsdale.com)
     echo "   -> Packaging Executive Systems Architect Dossier (michaelpragsdale.com)..."
@@ -917,15 +1065,16 @@ echo "👱‍♀️ JENNA: Compiling Narratives & Books..."
         fi
     fi
     
-    # 6. CDN SYNC
-    echo "   3. Beaming heavy assets to the CDN..."
+    # 6. CDN SYNC (Public Assets Only - Vaults & Master-WAVs live locally in /raggiesoft-vaults)
+    echo "   3. Beaming public web assets to the CDN (Vaults & Master-WAVs excluded)..."
     
-    # PASS 1: The Public Payload
     "$RCLONE_BIN" copy "$ASSETS_ROOT" do-spaces:assets.raggiesoft.com \
         --config "$RCLONE_CONF" \
         --exclude "/_workspace/**" \
         --exclude "/.git/**" \
         --exclude "**/vault/**" \
+        --exclude "**/vault-*/**" \
+        --exclude "**/master-wav/**" \
         --exclude ".gitignore" \
         --exclude ".DS_Store" \
         --exclude "desktop.ini" \
@@ -934,15 +1083,7 @@ echo "👱‍♀️ JENNA: Compiling Narratives & Books..."
         --s3-acl public-read \
         $RCLONE_PERF_FLAGS
         
-    # PASS 2: The Secure Vaults
-    echo "   4. Securing the Premium Vaults..."
-    "$RCLONE_BIN" copy "$ASSETS_ROOT" do-spaces:assets.raggiesoft.com \
-        --config "$RCLONE_CONF" \
-        --include "**/vault/**" \
-        --s3-acl private \
-        $RCLONE_PERF_FLAGS
-        
-    echo "👱‍♀️ JENNA: Success! All public assets are live, and all nested vaults are locked down. Sarah will pick this up shortly."
+    echo "👱‍♀️ JENNA: Success! All public assets are live on the CDN, and your local vaults remain safely off DigitalOcean Spaces. Sarah will pick this up shortly."
 }
 
 # --- UNIFIED ARGUMENT PARSER ---

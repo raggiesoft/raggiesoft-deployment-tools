@@ -126,8 +126,16 @@ sort -n "$TEMP_SORTED_ALBUMS" | cut -d'|' -f2 | while read tracks_file; do
     
     echo "   💿 HARPER: Processing '$ALBUM_NAME' by $ALBUM_ARTIST..."
 
-    # Scaffold output directory structure
-    mkdir -p web-mp3 vault/mp3 vault/ogg vault/flac vault/wav vault/archives streaming-services/album-art streaming-services/lyrics streaming-services/song-metadata
+    # Resolve decoupled Vault and Master-WAV paths in /raggiesoft-vaults (kept off DigitalOcean Spaces CDN)
+    export ARTIST_VAULT_DIR="$VAULTS_ROOT/$ARTIST_SLUG"
+    export MASTER_WAV_DIR="$ARTIST_VAULT_DIR/master-wav"
+    export ALBUM_VAULT_DIR="$ARTIST_VAULT_DIR/$ALBUM_SLUG/vault"
+
+    # Scaffold public CDN output directory structure in /raggiesoft-assets
+    mkdir -p web-mp3 streaming-services/album-art streaming-services/lyrics streaming-services/song-metadata
+
+    # Scaffold private local vault directory structure in /raggiesoft-vaults
+    mkdir -p "$ALBUM_VAULT_DIR/mp3" "$ALBUM_VAULT_DIR/ogg" "$ALBUM_VAULT_DIR/flac" "$ALBUM_VAULT_DIR/wav" "$ALBUM_VAULT_DIR/archives"
 
     # --------------------------------------------------------------------------
     # 4. Album Art Optimization

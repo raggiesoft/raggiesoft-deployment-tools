@@ -51,11 +51,13 @@ press_audio_formats() {
         "web-mp3/$f_base.mp3"
     fi
 
+    local vault_dir="${ALBUM_VAULT_DIR:-vault}"
+
     # --------------------------------------------------------------------------
     # Tier 2: Premium MP3 (V0 Variable Bitrate)
-    # Target: High-quality archival / standard premium download
+    # Target: High-quality archival / standard premium download (Stored in Local Vault)
     # --------------------------------------------------------------------------
-    if [ ! -f "vault/mp3/$f_base.mp3" ] || [ "$OVERWRITE" = true ]; then
+    if [ ! -f "$vault_dir/mp3/$f_base.mp3" ] || [ "$OVERWRITE" = true ]; then
         # -q:a 0 sets the highest variable bitrate quality for LAME
         ffmpeg -nostdin -hide_banner -loglevel error $ffmpeg_flag -i "$in_wav" $ART_FILE_PARAM \
         -codec:a libmp3lame -q:a 0 -id3v2_version 3 -write_id3v1 1 \
@@ -63,14 +65,14 @@ press_audio_formats() {
         -metadata date="$t_year" -metadata track="$t_track" -metadata disc="$t_disc" -metadata genre="$t_genre" \
         -metadata publisher="Engine Room Records" -metadata copyright="CC BY-SA 4.0 - $t_year Michael P. Ragsdale / RaggieSoft" \
         -metadata comment="Premium Archive | $ai_disclaimer" \
-        "vault/mp3/$f_base.mp3"
+        "$vault_dir/mp3/$f_base.mp3"
     fi
 
     # --------------------------------------------------------------------------
     # Tier 3: Premium OGG (Q9 Variable Bitrate)
-    # Target: Web audio API gapless playback and audiophile alternatives
+    # Target: Web audio API gapless playback and audiophile alternatives (Stored in Local Vault)
     # --------------------------------------------------------------------------
-    if [ ! -f "vault/ogg/$f_base.ogg" ] || [ "$OVERWRITE" = true ]; then
+    if [ ! -f "$vault_dir/ogg/$f_base.ogg" ] || [ "$OVERWRITE" = true ]; then
         # Note: Cover art injection is skipped here due to Ogg Vorbis container quirks
         # -q:a 9 is roughly equivalent to ~320kbps VBR
         ffmpeg -nostdin -hide_banner -loglevel error $ffmpeg_flag -i "$in_wav" \
@@ -79,14 +81,14 @@ press_audio_formats() {
         -metadata date="$t_year" -metadata tracknumber="$t_track" -metadata discnumber="$t_disc" \
         -metadata publisher="Engine Room Records" -metadata copyright="CC BY-SA 4.0 - $t_year Michael P. Ragsdale / RaggieSoft" \
         -metadata comment="Premium Archive | $ai_disclaimer" \
-        "vault/ogg/$f_base.ogg"
+        "$vault_dir/ogg/$f_base.ogg"
     fi
 
     # --------------------------------------------------------------------------
     # Tier 4: Premium FLAC (Lossless)
-    # Target: Master archive and strict audiophile distribution
+    # Target: Master archive and strict audiophile distribution (Stored in Local Vault)
     # --------------------------------------------------------------------------
-    if [ ! -f "vault/flac/$f_base.flac" ] || [ "$OVERWRITE" = true ]; then
+    if [ ! -f "$vault_dir/flac/$f_base.flac" ] || [ "$OVERWRITE" = true ]; then
         # -compression_level 8 provides maximum algorithmic file size reduction 
         # without affecting the lossless audio quality (it just takes longer to encode)
         ffmpeg -nostdin -hide_banner -loglevel error $ffmpeg_flag -i "$in_wav" $ART_FILE_PARAM \
@@ -95,6 +97,6 @@ press_audio_formats() {
         -metadata date="$t_year" -metadata track="$t_track" -metadata disc="$t_disc" -metadata genre="$t_genre" \
         -metadata publisher="Engine Room Records" -metadata copyright="CC BY-SA 4.0 - $t_year Michael P. Ragsdale / RaggieSoft" \
         -metadata comment="Premium Audiophile Archive | $ai_disclaimer" \
-        "vault/flac/$f_base.flac"
+        "$vault_dir/flac/$f_base.flac"
     fi
 }

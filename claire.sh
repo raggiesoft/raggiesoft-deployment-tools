@@ -31,6 +31,7 @@ cd "$WORKSPACE_DIR" || exit
 
 # Target Path where artist data is stored (resolved from /raggiesoft-deployment-tools)
 SEARCH_PATH="../raggiesoft-assets/engine-room-records/artists"
+VAULTS_PATH="../raggiesoft-vaults/engine-room-records/artists"
 
 # Validate that the archives directory is accessible
 if [ ! -d "$SEARCH_PATH" ]; then
@@ -38,12 +39,14 @@ if [ ! -d "$SEARCH_PATH" ]; then
     exit 1
 fi
 
-echo "   🗄️  Sweeping the archives: $SEARCH_PATH"
+echo "   🗄️  Sweeping the archives: $SEARCH_PATH (and Vaults: $VAULTS_PATH)"
 
 # Find every album folder by looking for the mandatory tracks.json source file
 find "$SEARCH_PATH" -name "tracks.json" | while read -r tracks_file; do
     
     album_dir=$(dirname "$tracks_file")
+    album_slug=$(basename "$album_dir")
+    artist_slug=$(basename "$(dirname "$album_dir")")
     
     # Check if album.json exists to confirm it's a valid album directory
     if [ ! -f "$album_dir/album.json" ]; then
@@ -52,6 +55,11 @@ find "$SEARCH_PATH" -name "tracks.json" | while read -r tracks_file; do
 
     echo "      🗑️  CLAIRE: Dusting off '$album_dir'..."
     
+    # Clean the decoupled album vault directory in /raggiesoft-vaults (never touching master-wav)
+    if [ -d "$VAULTS_PATH/$artist_slug/$album_slug/vault" ]; then
+        rm -rf "$VAULTS_PATH/$artist_slug/$album_slug/vault"
+    fi
+
     # Enter the album directory safely
     pushd "$album_dir" > /dev/null
 
