@@ -541,15 +541,15 @@ function do_push() {
         }
     '
 
-echo "👱‍♀️ JENNA: Compiling Narratives & Books..."
-    if [ -f "$NARRATIVES_ROOT/scripts/publish_books.php" ]; then
-        php "$NARRATIVES_ROOT/scripts/publish_books.php"
+    echo "👱‍♀️ JENNA: Calling Paige (paige.php) to compile Narratives & Books..."
+    if [ -f "$DEPLOYMENT_TOOLS_ROOT/paige.php" ]; then
+        php "$DEPLOYMENT_TOOLS_ROOT/paige.php"
         if [ $? -ne 0 ]; then
-            echo "🛑 JENNA: ABORTING! Failed to compile narratives."
+            echo "🛑 JENNA: ABORTING! Paige reported an error compiling narratives."
             exit 1
         fi
     else
-        echo "⚠️  JENNA: Could not find publish_books.php. Skipping compilation."
+        echo "⚠️  JENNA: Could not find paige.php in raggiesoft-deployment-tools. Skipping compilation."
     fi
 
     echo "👱‍♀️ JENNA: Generating EPUB and PDF eBooks..."
