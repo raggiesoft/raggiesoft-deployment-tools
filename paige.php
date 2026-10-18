@@ -33,8 +33,8 @@
  *     - Dual Target Route Deployment: Outputs route JSON maps to both the Hub
  *       (`/raggiesoft.com/www/data/routes/raggiesoft-books/books/`) and the standalone
  *       Ocean View Archives reader (`/raggiesoft.com/subdomains/books/data/routes/`).
- *     - Integrated Full-Text Search Indexing: Automatically crawls all eras (`e*`/`b*`),
- *       chapters (`c*`), and scenes (`s*.md`/`p*.md`) to build `search-index.json`.
+ *     - Integrated Full-Text Search Indexing: Automatically crawls all eras (`e*`),
+ *       chapters (`c*`), and scenes (`s*.md`) to build `search-index.json`.
  *
  * CLI Usage:
  *     php raggiesoft-deployment-tools/paige.php
@@ -257,16 +257,13 @@ foreach ($narrativeDirs as $narrativeDir) {
 
     $tocBooks = [];
 
-    // Auto-discover Era directories based on 'e*' naming convention (or legacy 'b*')
+    // Auto-discover Era directories strictly based on 'e*' naming convention
     $bDirs = glob($narrativeDir . '/e*', GLOB_ONLYDIR);
-    if (empty($bDirs)) {
-        $bDirs = glob($narrativeDir . '/b*', GLOB_ONLYDIR);
-    }
     sort($bDirs); // Ensure sequential processing
 
     foreach ($bDirs as $bIndex => $bDir) {
         $bName = basename($bDir);
-        $eraNum = intval(preg_replace('/^[eb]/', '', $bName));
+        $eraNum = intval(str_replace('e', '', $bName));
 
         $eraTitle = "Era {$eraNum}";
         $metaPath = $bDir . '/ovab.json';
@@ -330,16 +327,13 @@ foreach ($narrativeDirs as $narrativeDir) {
                 'scenes' => []
             ];
 
-            // Auto-discover individual scene markdown files based on 's*.md' (or legacy 'p*.md')
+            // Auto-discover individual scene markdown files strictly based on 's*.md'
             $pFiles = glob($cDir . '/s*.md');
-            if (empty($pFiles)) {
-                $pFiles = glob($cDir . '/p*.md');
-            }
             sort($pFiles);
 
             foreach ($pFiles as $pIndex => $pFile) {
                 $pName = basename($pFile);
-                $sceneNum = intval(preg_replace('/^[sp]|\.md$/', '', $pName));
+                $sceneNum = intval(str_replace(['s', '.md'], '', $pName));
 
                 $yamlTitle = "Scene {$sceneNum}";
                 $partContent = file_get_contents($pFile);
