@@ -204,3 +204,52 @@ if [ ! -d "$SEARCH_PATH" ]; then
     echo "   ❌ HARPER: Whoops! Directory not found at $SEARCH_PATH"
     exit 1
 fi
+
+# --- OFFICIAL US ISRC AGENCY REGISTRANT INITIALIZATION (PREFIX: QTAHP) ---
+# Registrant Name: Michael Ragsdale | Registrant ID: 185611
+# Contact: dsp.operations@engineroom-records.com | Prefix Allocated: 2026-10-20
+export ISRC_REGISTRANT_PREFIX="QTAHP"
+export ISRC_YEAR_SUFFIX=$(date +"%y")
+export TEMP_ISRC_COUNTER_FILE="$ROOT_DIR/temp_isrc_counter.txt"
+export TEMP_WAV_ISRC_MAP="$ROOT_DIR/temp_wav_isrc_map.tsv"
+
+> "$TEMP_WAV_ISRC_MAP"
+
+python3 - "$SEARCH_PATH" "$ISRC_REGISTRANT_PREFIX" "$ISRC_YEAR_SUFFIX" "$TEMP_ISRC_COUNTER_FILE" "$TEMP_WAV_ISRC_MAP" << 'PYEOF'
+import glob, json, os, sys
+
+search_path, prefix, yy, counter_file, map_file = sys.argv[1:6]
+full_prefix = f"{prefix}{yy}".upper()
+max_seq = 0
+wav_map = {}
+
+for tf in sorted(glob.glob(f"{search_path}/*/*/tracks.json") + glob.glob(f"{search_path}/*/*/*/tracks.json")):
+    rel = os.path.relpath(os.path.dirname(tf), search_path)
+    artist = rel.split("/")[0]
+    try:
+        with open(tf, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        continue
+    tracks = data if isinstance(data, list) else data.get("tracks", [])
+    for t in tracks:
+        isrc = str(t.get("isrc") or "").strip().upper()
+        mwp = str(t.get("masterWavPath") or "").strip()
+        if isrc:
+            if mwp and f"{artist}|{mwp}" not in wav_map:
+                wav_map[f"{artist}|{mwp}"] = isrc
+            if isrc.startswith(full_prefix) and len(isrc) == 12 and isrc[7:].isdigit():
+                seq = int(isrc[7:])
+                if seq > max_seq:
+                    max_seq = seq
+
+with open(counter_file, "w", encoding="utf-8") as f:
+    f.write(str(max_seq))
+
+with open(map_file, "w", encoding="utf-8") as f:
+    for k, v in sorted(wav_map.items()):
+        f.write(f"{k}\t{v}\n")
+PYEOF
+
+INITIAL_ISRC_MAX=$(cat "$TEMP_ISRC_COUNTER_FILE" 2>/dev/null || echo "0")
+echo "   🏷️  HARPER: US ISRC Agency Minter Ready (Prefix: ${ISRC_REGISTRANT_PREFIX}${ISRC_YEAR_SUFFIX} • Highest Allocated: $(printf '%05d' "$INITIAL_ISRC_MAX"))"

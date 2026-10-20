@@ -32,6 +32,11 @@ press_audio_formats() {
     local t_track="$7"
     local t_disc="$8"
     local t_genre="$9"
+    local t_isrc="${10:-}"
+    local local_ff_flag="$ffmpeg_flag"
+    if [ "$MINTED_NEW_ISRC" = true ]; then
+        local_ff_flag="-y"
+    fi
     
     # Define the universal AI disclosure stamp required for copyright transparency
     local ai_disclaimer="Audio Generation: Suno. AI Elements: Vocals, Instrumentation, Composition. Human Elements: Lyrics, Narrative Lore. CC BY-SA 4.0. Commercial Rights Cleared."
@@ -40,12 +45,13 @@ press_audio_formats() {
     # Tier 1: Radio Edit (128kbps MP3)
     # Target: Fast web streaming, low bandwidth
     # --------------------------------------------------------------------------
-    if [ ! -f "web-mp3/$f_base.mp3" ] || [ "$OVERWRITE" = true ]; then
+    if [ ! -f "web-mp3/$f_base.mp3" ] || [ "$OVERWRITE" = true ] || [ "$MINTED_NEW_ISRC" = true ]; then
         # -write_id3v1 ensures legacy player compatibility alongside id3v2
-        ffmpeg -nostdin -hide_banner -loglevel error $ffmpeg_flag -i "$in_wav" $ART_FILE_PARAM \
+        ffmpeg -nostdin -hide_banner -loglevel error $local_ff_flag -i "$in_wav" $ART_FILE_PARAM \
         -codec:a libmp3lame -b:a 128k -id3v2_version 3 -write_id3v1 1 \
         -metadata title="$t_title" -metadata artist="$t_artist" -metadata album="$t_album" \
         -metadata date="$t_year" -metadata track="$t_track" -metadata disc="$t_disc" -metadata genre="$t_genre" \
+        -metadata TSRC="$t_isrc" -metadata ISRC="$t_isrc" \
         -metadata publisher="Engine Room Records" -metadata copyright="CC BY-SA 4.0 - $t_year Michael P. Ragsdale / RaggieSoft" \
         -metadata comment="Free Stream Edition | $ai_disclaimer" \
         "web-mp3/$f_base.mp3"
@@ -57,12 +63,13 @@ press_audio_formats() {
     # Tier 2: Premium MP3 (V0 Variable Bitrate)
     # Target: High-quality archival / standard premium download (Stored in Local Vault)
     # --------------------------------------------------------------------------
-    if [ ! -f "$vault_dir/mp3/$f_base.mp3" ] || [ "$OVERWRITE" = true ]; then
+    if [ ! -f "$vault_dir/mp3/$f_base.mp3" ] || [ "$OVERWRITE" = true ] || [ "$MINTED_NEW_ISRC" = true ]; then
         # -q:a 0 sets the highest variable bitrate quality for LAME
-        ffmpeg -nostdin -hide_banner -loglevel error $ffmpeg_flag -i "$in_wav" $ART_FILE_PARAM \
+        ffmpeg -nostdin -hide_banner -loglevel error $local_ff_flag -i "$in_wav" $ART_FILE_PARAM \
         -codec:a libmp3lame -q:a 0 -id3v2_version 3 -write_id3v1 1 \
         -metadata title="$t_title" -metadata artist="$t_artist" -metadata album="$t_album" \
         -metadata date="$t_year" -metadata track="$t_track" -metadata disc="$t_disc" -metadata genre="$t_genre" \
+        -metadata TSRC="$t_isrc" -metadata ISRC="$t_isrc" \
         -metadata publisher="Engine Room Records" -metadata copyright="CC BY-SA 4.0 - $t_year Michael P. Ragsdale / RaggieSoft" \
         -metadata comment="Premium Archive | $ai_disclaimer" \
         "$vault_dir/mp3/$f_base.mp3"
@@ -72,13 +79,14 @@ press_audio_formats() {
     # Tier 3: Premium OGG (Q9 Variable Bitrate)
     # Target: Web audio API gapless playback and audiophile alternatives (Stored in Local Vault)
     # --------------------------------------------------------------------------
-    if [ ! -f "$vault_dir/ogg/$f_base.ogg" ] || [ "$OVERWRITE" = true ]; then
+    if [ ! -f "$vault_dir/ogg/$f_base.ogg" ] || [ "$OVERWRITE" = true ] || [ "$MINTED_NEW_ISRC" = true ]; then
         # Note: Cover art injection is skipped here due to Ogg Vorbis container quirks
         # -q:a 9 is roughly equivalent to ~320kbps VBR
-        ffmpeg -nostdin -hide_banner -loglevel error $ffmpeg_flag -i "$in_wav" \
+        ffmpeg -nostdin -hide_banner -loglevel error $local_ff_flag -i "$in_wav" \
         -codec:a libvorbis -q:a 9 \
         -metadata title="$t_title" -metadata artist="$t_artist" -metadata album="$t_album" \
         -metadata date="$t_year" -metadata tracknumber="$t_track" -metadata discnumber="$t_disc" \
+        -metadata ISRC="$t_isrc" \
         -metadata publisher="Engine Room Records" -metadata copyright="CC BY-SA 4.0 - $t_year Michael P. Ragsdale / RaggieSoft" \
         -metadata comment="Premium Archive | $ai_disclaimer" \
         "$vault_dir/ogg/$f_base.ogg"
@@ -88,13 +96,14 @@ press_audio_formats() {
     # Tier 4: Premium FLAC (Lossless)
     # Target: Master archive and strict audiophile distribution (Stored in Local Vault)
     # --------------------------------------------------------------------------
-    if [ ! -f "$vault_dir/flac/$f_base.flac" ] || [ "$OVERWRITE" = true ]; then
+    if [ ! -f "$vault_dir/flac/$f_base.flac" ] || [ "$OVERWRITE" = true ] || [ "$MINTED_NEW_ISRC" = true ]; then
         # -compression_level 8 provides maximum algorithmic file size reduction 
         # without affecting the lossless audio quality (it just takes longer to encode)
-        ffmpeg -nostdin -hide_banner -loglevel error $ffmpeg_flag -i "$in_wav" $ART_FILE_PARAM \
+        ffmpeg -nostdin -hide_banner -loglevel error $local_ff_flag -i "$in_wav" $ART_FILE_PARAM \
         -codec:a flac -compression_level 8 \
         -metadata title="$t_title" -metadata artist="$t_artist" -metadata album="$t_album" \
         -metadata date="$t_year" -metadata track="$t_track" -metadata disc="$t_disc" -metadata genre="$t_genre" \
+        -metadata ISRC="$t_isrc" \
         -metadata publisher="Engine Room Records" -metadata copyright="CC BY-SA 4.0 - $t_year Michael P. Ragsdale / RaggieSoft" \
         -metadata comment="Premium Audiophile Archive | $ai_disclaimer" \
         "$vault_dir/flac/$f_base.flac"

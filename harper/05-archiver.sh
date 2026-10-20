@@ -15,8 +15,12 @@
 # ==============================================================================
 # Note: This is sourced at the end of the album loop in Module 03.
 
-# Proceed with archiving only if 7-zip was located and we aren't doing metadata-only
-if [ "$USE_SEVEN_ZIP" = true ] && [ "$METADATA_ONLY" = false ]; then
+# Proceed with archiving only if 7-zip was located and we aren't doing metadata-only (or if a new ISRC was minted on this album)
+if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MINTED_NEW_ISRC" = true ]; }; then
+    ARCHIVE_OVERWRITE="$OVERWRITE"
+    if [ "$ALBUM_MINTED_NEW_ISRC" = true ]; then
+        ARCHIVE_OVERWRITE=true
+    fi
     VAULT_TARGET="${ALBUM_VAULT_DIR:-vault}"
     mkdir -p "$VAULT_TARGET/archives"
 
@@ -32,7 +36,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && [ "$METADATA_ONLY" = false ]; then
     # --------------------------------------------------------------------------
     # 1. Premium MP3 Archive
     # --------------------------------------------------------------------------
-    if [ ! -f "$ZIP_MP3" ] || [ "$OVERWRITE" = true ]; then
+    if [ ! -f "$ZIP_MP3" ] || [ "$ARCHIVE_OVERWRITE" = true ]; then
         echo "         -> 📦 Packing Premium MP3 Archive..."
         rm -f "$ZIP_MP3"
         mkdir -p "$VAULT_TARGET/archives/staging_mp3/lyrics"
@@ -61,7 +65,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && [ "$METADATA_ONLY" = false ]; then
     # --------------------------------------------------------------------------
     # 2. Premium OGG Archive
     # --------------------------------------------------------------------------
-    if [ ! -f "$ZIP_OGG" ] || [ "$OVERWRITE" = true ]; then
+    if [ ! -f "$ZIP_OGG" ] || [ "$ARCHIVE_OVERWRITE" = true ]; then
         echo "         -> 📦 Packing Premium OGG Archive..."
         rm -f "$ZIP_OGG"
         mkdir -p "$VAULT_TARGET/archives/staging_ogg/lyrics"
@@ -90,7 +94,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && [ "$METADATA_ONLY" = false ]; then
     # --------------------------------------------------------------------------
     # 3. WAV Master Archive (Ultra Compression)
     # --------------------------------------------------------------------------
-    if [ ! -f "$ZIP_WAV" ] || [ "$OVERWRITE" = true ]; then
+    if [ ! -f "$ZIP_WAV" ] || [ "$ARCHIVE_OVERWRITE" = true ]; then
         echo "         -> 📦 Packing massive WAV Master Archive (Ultra Compression active!)..."
         rm -f "$ZIP_WAV"
         mkdir -p "$VAULT_TARGET/archives/staging_wav/lyrics"
@@ -119,7 +123,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && [ "$METADATA_ONLY" = false ]; then
     # --------------------------------------------------------------------------
     # 4. Audiophile FLAC Archive
     # --------------------------------------------------------------------------
-    if [ ! -f "$ZIP_FLAC" ] || [ "$OVERWRITE" = true ]; then
+    if [ ! -f "$ZIP_FLAC" ] || [ "$ARCHIVE_OVERWRITE" = true ]; then
         echo "         -> 📦 Packing Audiophile FLAC Archive..."
         rm -f "$ZIP_FLAC"
         mkdir -p "$VAULT_TARGET/archives/staging_flac/lyrics"
@@ -148,7 +152,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && [ "$METADATA_ONLY" = false ]; then
     # --------------------------------------------------------------------------
     # 5. Standard Archive (MP3 & OGG combined)
     # --------------------------------------------------------------------------
-    if [ ! -f "$ZIP_STANDARD" ] || [ "$OVERWRITE" = true ]; then
+    if [ ! -f "$ZIP_STANDARD" ] || [ "$ARCHIVE_OVERWRITE" = true ]; then
         echo "         -> 📦 Packing the Standard Archive (MP3 & OGG)..."
         rm -f "$ZIP_STANDARD"
         mkdir -p "$VAULT_TARGET/archives/staging_standard/lyrics"
@@ -182,7 +186,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && [ "$METADATA_ONLY" = false ]; then
     # --------------------------------------------------------------------------
     ZIP_FREE="web-mp3/${ARCHIVE_BASE_NAME}-free-archive.zip"
 
-    if [ ! -f "$ZIP_FREE" ] || [ "$OVERWRITE" = true ]; then
+    if [ ! -f "$ZIP_FREE" ] || [ "$ARCHIVE_OVERWRITE" = true ]; then
         echo "         -> 📦 Packing the Free Web Archive (128kbps MP3)..."
         rm -f "$ZIP_FREE"
         

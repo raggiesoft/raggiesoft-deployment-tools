@@ -65,6 +65,52 @@ MASTER_WAV_PATH=`echo "$track_json" | jq -r '.masterWavPath // empty'`
 ISRC_CODE=`echo "$track_json" | jq -r '.isrc // empty'`
 DSP_STATUS_OVERRIDE=`echo "$track_json" | jq -r '.dspStatus // empty'`
 
+# Resolve Master WAV path early so we know if the recording exists on disk
+MASTER_DIR="${MASTER_WAV_DIR:-$VAULTS_ROOT/$ARTIST_SLUG/master-wav}"
+SOURCE_WAV="$MASTER_DIR/$MASTER_WAV_PATH.wav"
+LOCAL_WAV="${ALBUM_VAULT_DIR:-vault}/wav/$FILE_BASE.wav"
+
+# ------------------------------------------------------------------------------
+# 1b. Official US ISRC Agency Auto-Minter (Prefix: QTAHP • Registrant ID: 185611)
+# ------------------------------------------------------------------------------
+# If a completed sound recording ($SOURCE_WAV exists on disk) does not yet have
+# an ISRC in `tracks.json`:
+# 1. First check if the identical recording (`$ARTIST_SLUG|$MASTER_WAV_PATH`)
+#    already has an ISRC assigned on another album/compilation; if so, inherit it
+#    to obey the US ISRC Agency Single-ISRC-Per-Recording rule.
+# 2. Otherwise, mint the next sequential `QTAHP<YY><NNNNN>` code, persist it
+#    directly into `tracks.json`, and register it in `$TEMP_WAV_ISRC_MAP`.
+MINTED_NEW_ISRC=false
+if [ -z "$ISRC_CODE" ] || [ "$ISRC_CODE" == "null" ]; then
+    ISRC_CODE=""
+    if [ -n "$MASTER_WAV_PATH" ] && [ -f "$TEMP_WAV_ISRC_MAP" ]; then
+        EXISTING_WAV_ISRC=$(awk -F'\t' -v key="$ARTIST_SLUG|$MASTER_WAV_PATH" '$1 == key {print $2; exit}' "$TEMP_WAV_ISRC_MAP")
+        if [ -n "$EXISTING_WAV_ISRC" ]; then
+            ISRC_CODE="$EXISTING_WAV_ISRC"
+            MINTED_NEW_ISRC=true
+            ALBUM_MINTED_NEW_ISRC=true
+            echo "      🔗 HARPER: Linked existing recording ISRC $ISRC_CODE for shared master '$MASTER_WAV_PATH'"
+            jq --arg isrc "$ISRC_CODE" --arg file "$FILE_BASE" \
+              'if type == "array" then map(if .fileName == $file then .isrc = $isrc else . end) else .tracks |= map(if .fileName == $file then .isrc = $isrc else . end) end' \
+              tracks.json > tracks.json.tmp && mv tracks.json.tmp tracks.json
+        fi
+    fi
+
+    if [ -z "$ISRC_CODE" ] && [ -z "$ALBUM_UPC" ] && [ -n "$MASTER_WAV_PATH" ] && [ -f "$SOURCE_WAV" ]; then
+        CURR_SEQ=$(cat "$TEMP_ISRC_COUNTER_FILE" 2>/dev/null || echo "0")
+        NEXT_SEQ=$((CURR_SEQ + 1))
+        echo "$NEXT_SEQ" > "$TEMP_ISRC_COUNTER_FILE"
+        ISRC_CODE=$(printf "%s%s%05d" "${ISRC_REGISTRANT_PREFIX:-QTAHP}" "${ISRC_YEAR_SUFFIX:-26}" "$NEXT_SEQ")
+        MINTED_NEW_ISRC=true
+        ALBUM_MINTED_NEW_ISRC=true
+        printf "%s|%s\t%s\n" "$ARTIST_SLUG" "$MASTER_WAV_PATH" "$ISRC_CODE" >> "$TEMP_WAV_ISRC_MAP"
+        echo "      🏷️  HARPER: Minted Official US ISRC Agency Code: $ISRC_CODE ($TITLE)"
+        jq --arg isrc "$ISRC_CODE" --arg file "$FILE_BASE" \
+          'if type == "array" then map(if .fileName == $file then .isrc = $isrc else . end) else .tracks |= map(if .fileName == $file then .isrc = $isrc else . end) end' \
+          tracks.json > tracks.json.tmp && mv tracks.json.tmp tracks.json
+    fi
+fi
+
 # ------------------------------------------------------------------------------
 # 2. Engine Room Records Internal Catalog Routing
 # ------------------------------------------------------------------------------
@@ -77,6 +123,7 @@ case "$ALBUM_ARTIST" in
     "The Arctic Symphony Project"|"The Winter Palace") ROSTER_PREFIX="ERR-005" ;;
     "Crimson Node") ROSTER_PREFIX="ERR-006" ;;
     "Mana Canvas") ROSTER_PREFIX="ERR-007" ;;
+    "The Hoshizora Ensemble") ROSTER_PREFIX="ERR-008" ;;
     *) ROSTER_PREFIX="ERR-999" ;;
 esac
 
@@ -144,14 +191,14 @@ else
     RUNTIME=`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$SOURCE_WAV" | awk '{printf "%d:%02d\n", $1/60, $1%60}'`
     echo "      ⏱️  HARPER: Track runtime clocked at $RUNTIME"
 
-        if [ "$METADATA_ONLY" = false ]; then
-        if [ ! -f "$LOCAL_WAV" ] || [ "$OVERWRITE" = true ]; then
-            echo "         -> 💾 Stamping BWF Metadata and pulling $MASTER_WAV_PATH to $LOCAL_WAV..."
+        if [ "$METADATA_ONLY" = false ] || [ "$MINTED_NEW_ISRC" = true ]; then
+        if [ ! -f "$LOCAL_WAV" ] || [ "$OVERWRITE" = true ] || [ "$MINTED_NEW_ISRC" = true ]; then
+            echo "         -> 💾 Stamping BWF Metadata (ISRC: $ISRC_CODE) and pulling $MASTER_WAV_PATH to $LOCAL_WAV..."
             mkdir -p "${ALBUM_VAULT_DIR:-vault}/wav"
             
             # Replaces the standard cp command with a lossless FFmpeg metadata pass
             # Stuffs metadata directly into the RIFF INFO and BEXT chunks of the WAV
-            ffmpeg -nostdin -hide_banner -loglevel error $ffmpeg_flag -i "$SOURCE_WAV" -write_bext 1 \
+            ffmpeg -nostdin -hide_banner -loglevel error -y -i "$SOURCE_WAV" -write_bext 1 \
             -metadata title="$TITLE" \
             -metadata artist="$ALBUM_ARTIST" \
             -metadata album="$ALBUM_NAME" \
@@ -201,7 +248,7 @@ else
     UPC_PRINT="$ALBUM_UPC"
 fi
 
-if [ ! -f "$METADATA_MD" ] || [ "$OVERWRITE" = true ]; then
+if [ ! -f "$METADATA_MD" ] || [ "$OVERWRITE" = true ] || [ "$MINTED_NEW_ISRC" = true ]; then
     echo "         -> 📋 Drafting DistroKid-Optimized Metadata sheet..."
     cat << EOF > "$METADATA_MD"
 # $TITLE - DistroKid Quick-Copy Sheet
@@ -211,6 +258,7 @@ if [ ! -f "$METADATA_MD" ] || [ "$OVERWRITE" = true ]; then
 * **Primary Artist:** $ALBUM_ARTIST
 * **Genre:** $GENRE
 * **Real-World DSP Release Date:** $REAL_RELEASE_DATE
+* **Already got an ISRC code? (US ISRC Prefix QTAHP):** $ISRC_CODE
 
 **DistroKid AI Credits Questionnaire:**
 * **Did AI generate any part of this track?** Yes
@@ -233,6 +281,7 @@ if [ ! -f "$METADATA_MD" ] || [ "$OVERWRITE" = true ]; then
 ## 3. Internal Catalog Information
 * **Engine Room ID:** $ERR_ID
 * **ISRC:** $ISRC_CODE
+* **US ISRC Agency Registrant:** Michael Ragsdale (Registrant ID: 185611 • Prefix: QTAHP • dsp.operations@engineroom-records.com)
 * **Album UPC / GTIN-12:** $UPC_PRINT
 * **Track Length:** $RUNTIME
 * **Fictional Narrative Release Date:** $NARRATIVE_DATE
@@ -341,11 +390,11 @@ fi
 # ------------------------------------------------------------------------------
 # 7. Asynchronous Audio Generation Spawning
 # ------------------------------------------------------------------------------
-if [ "$METADATA_ONLY" = false ]; then
+if [ "$METADATA_ONLY" = false ] || [ "$MINTED_NEW_ISRC" = true ]; then
     if [ -f "$WAV_FILE" ]; then
-        echo "         -> 🎚️ Pressing Multi-Tier Audio (Parallelized)..."
+        echo "         -> 🎚️ Pressing Multi-Tier Audio (Parallelized, ISRC: $ISRC_CODE)..."
         # Run in background to drastically speed up processing
-        press_audio_formats "$WAV_FILE" "$FILE_BASE" "$TITLE" "$ALBUM_ARTIST" "$ALBUM_NAME" "$REAL_RELEASE_YEAR" "$TRACK_NUM" "$DISC_NUM" "$GENRE" &
+        press_audio_formats "$WAV_FILE" "$FILE_BASE" "$TITLE" "$ALBUM_ARTIST" "$ALBUM_NAME" "$REAL_RELEASE_YEAR" "$TRACK_NUM" "$DISC_NUM" "$GENRE" "$ISRC_CODE" &
         # Capture PID for parent shell synchronization
         PIDS+=($!)
         

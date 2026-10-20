@@ -143,7 +143,7 @@ sort -n "$TEMP_SORTED_ALBUMS" | cut -d'|' -f2 | while read tracks_file; do
     UPSCALED_ART="streaming-services/album-art/$ART_FILE"
     
     # Run RealESRGAN upscale or just copy if not available
-    if [ -f "$ART_FILE" ] && [ ! -f "$UPSCALED_ART" ]; then
+    if [ -f "$ART_FILE" ] && [ ! -f "$UPSCALED_ART" ] && [ "$METADATA_ONLY" = false ]; then
         if [ "$USE_UPSCALER" = true ]; then
             echo "      🖼️ HARPER: Upscaling album art ($ART_FILE)..."
             if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
@@ -251,6 +251,7 @@ sort -n "$TEMP_SORTED_ALBUMS" | cut -d'|' -f2 | while read tracks_file; do
     # 6. Track Processing Loop (Sub-Module)
     # --------------------------------------------------------------------------
     declare -a PIDS=()
+    ALBUM_MINTED_NEW_ISRC=false
 
     # Loop through the tracks array in tracks.json and spawn the track processor
     while read -r track_json; do
