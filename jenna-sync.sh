@@ -92,6 +92,132 @@ fi
 
 # 3. JENNA'S BRAIN (Functions)
 
+# Global Connectivity State Flags (Populated by 5-second pre-flight probes)
+CAN_PUSH_GITHUB=true
+CAN_SYNC_CDN=true
+
+# ============================================================================
+# Helper: run_with_timeout <seconds> <command...>
+# ============================================================================
+# Executes a command in its own process group with a strict OS-level SIGKILL (-9)
+# timer enforced by /usr/bin/perl. Unlike user-space flags (--timeout), this
+# guarantees that blackholed DNS or TLS handshakes on restrictive public WiFi
+# networks terminate at the exact <seconds> mark even for Go binaries (rclone).
+function run_with_timeout() {
+    local secs="$1"
+    shift
+    /usr/bin/perl -e '
+        my $t = shift @ARGV;
+        my $pid = fork();
+        if ($pid == 0) { setpgrp(0, 0); exec @ARGV; exit 127; }
+        local $SIG{ALRM} = sub { kill -9, $pid; exit 124; };
+        alarm $t;
+        waitpid($pid, 0);
+        alarm 0;
+        exit($? >> 8);
+    ' "$secs" "$@"
+}
+
+# ============================================================================
+# Helper: run_github_preflight (5-Second Automatic GitHub Probe)
+# ============================================================================
+# Probes GitHub reachability within 5 seconds without needing --public-wifi:
+# 1. Tests standard SSH on Port 22 (unless --public-wifi already forced Port 443).
+# 2. If Port 22 is blocked/timed out, automatically falls back to SSH over Port 443
+#    (ssh.github.com:443) and tests within 5 seconds.
+# 3. Also tests HTTPS git reachability within 5 seconds.
+# 4. If unreachable, sets CAN_PUSH_GITHUB=false so Jenna still builds and commits
+#    locally while cleanly skipping network git push/pull/fetch commands.
+function run_github_preflight() {
+    echo "👱‍♀️ JENNA: Running 5-second GitHub pre-flight check..."
+    export GIT_HTTP_LOW_SPEED_LIMIT=1000
+    export GIT_HTTP_LOW_SPEED_TIME=5
+
+    local ssh_ok=false
+    if [ "$USE_PUBLIC_WIFI" != true ]; then
+        local out22
+        out22=$(run_with_timeout 5 ssh -T -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=accept-new git@github.com 2>&1)
+        if echo "$out22" | grep -qi "successfully authenticated"; then
+            ssh_ok=true
+            echo "      ✓ GitHub SSH (Port 22) reachable."
+        fi
+    fi
+
+    if [ "$ssh_ok" = false ]; then
+        local out443
+        out443=$(run_with_timeout 5 ssh -T -p 443 -o HostName=ssh.github.com -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=accept-new git@github.com 2>&1)
+        if echo "$out443" | grep -qi "successfully authenticated"; then
+            export GIT_SSH_COMMAND="ssh -o Port=443 -o HostName=ssh.github.com -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5"
+            ssh_ok=true
+            echo "      ✓ GitHub SSH auto-routed over Port 443 (ssh.github.com:443)."
+        fi
+    fi
+
+    local https_ok=false
+    if run_with_timeout 5 command git ls-remote --heads https://github.com/raggiesoft/raggiesoft-narratives.git main >/dev/null 2>&1; then
+        https_ok=true
+        echo "      ✓ GitHub HTTPS (Port 443) reachable."
+    fi
+
+    if [ "$ssh_ok" = true ] || [ "$https_ok" = true ]; then
+        CAN_PUSH_GITHUB=true
+    else
+        CAN_PUSH_GITHUB=false
+        echo "⚠️  JENNA PRE-FLIGHT: GitHub did not respond within 5 seconds on this network."
+        echo "      -> Local builds and Git commits will still run; remote pushes will be skipped."
+    fi
+}
+
+# ============================================================================
+# Helper: run_cdn_preflight (5-Second Automatic DigitalOcean Spaces Probe)
+# ============================================================================
+# Tests whether DigitalOcean Spaces (nyc3.digitaloceanspaces.com) can complete
+# a single top-level bucket listing within 5 seconds. If the current WiFi
+# firewall blackholes S3/Spaces traffic, kills the probe at 5.0s and sets
+# CAN_SYNC_CDN=false so rclone never hangs indefinitely.
+function run_cdn_preflight() {
+    echo "👱‍♀️ JENNA: Running 5-second DigitalOcean Spaces CDN pre-flight check..."
+    if run_with_timeout 5 "$RCLONE_BIN" lsf do-spaces:assets.raggiesoft.com \
+        --max-depth 1 \
+        --config "$RCLONE_CONF" \
+        --contimeout=4s \
+        --timeout=4s \
+        --retries=1 \
+        --low-level-retries=1 \
+        --bind 0.0.0.0 \
+        --disable-http2 \
+        --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" >/dev/null 2>&1; then
+        CAN_SYNC_CDN=true
+        echo "      ✓ DigitalOcean Spaces CDN reachable (<5s)."
+    else
+        CAN_SYNC_CDN=false
+        echo "⚠️  JENNA PRE-FLIGHT: DigitalOcean Spaces blocked or timed out (>5s) on this WiFi."
+        echo "      -> Skipping rclone CDN sync (will sync automatically next time Spaces is reachable)."
+    fi
+}
+
+# ============================================================================
+# Wrapper: git (Guards network git subcommands with pre-flight & timeout)
+# ============================================================================
+# Local git operations (add, commit, status, diff-index, tag, log, rev-parse)
+# execute directly via `command git`. Remote network operations (push, pull,
+# fetch, clone, ls-remote) check CAN_PUSH_GITHUB first so offline/restricted
+# WiFi runs never hang.
+function git() {
+    case "$1" in
+        push|pull|fetch|clone|ls-remote)
+            if [ "$CAN_PUSH_GITHUB" != true ]; then
+                echo "      ⚠️  [GitHub Unreachable] Skipping 'git $*' (saved locally)."
+                return 0
+            fi
+            command git "$@"
+            ;;
+        *)
+            command git "$@"
+            ;;
+    esac
+}
+
 function show_help() {
     echo "Usage: "
     echo "  ./jenna-sync.sh --push -m \"Commit Message\" [-t \"v1.0.0\"] [--force]"
@@ -315,6 +441,7 @@ function generate_sitemap() {
 function do_pull() {
     echo "👱‍♀️ JENNA: On it! Bringing everything down to your machine..."
     echo "          $CONNECTION_MSG"
+    run_github_preflight
     
     echo "   1. Checking the Hub (raggiesoft.com/www)..."
     if [ -d "$HUB_ROOT" ]; then cd "$HUB_ROOT" && git pull origin main; fi
@@ -401,19 +528,23 @@ function do_pull() {
     fi
     
     echo "   6. Hauling the heavy boxes (DigitalOcean Spaces)..."
-    "$RCLONE_BIN" sync do-spaces:assets.raggiesoft.com "$ASSETS_ROOT" \
-        --config "$RCLONE_CONF" \
-        --exclude "/_workspace/**" \
-        --exclude "/.git/**" \
-        --exclude "**/vault/**" \
-        --exclude "**/master-wav/**" \
-        --exclude ".DS_Store" \
-        --exclude "desktop.ini" \
-        --exclude "Thumbs.db" \
-        --exclude "._*" \
-        "${RCLONE_PERF_FLAGS[@]}"
-        
-    echo "👱‍♀️ JENNA: All done! Your local files are perfectly synced."
+    run_cdn_preflight
+    if [ "$CAN_SYNC_CDN" = true ]; then
+        "$RCLONE_BIN" sync do-spaces:assets.raggiesoft.com "$ASSETS_ROOT" \
+            --config "$RCLONE_CONF" \
+            --exclude "/_workspace/**" \
+            --exclude "/.git/**" \
+            --exclude "**/vault/**" \
+            --exclude "**/master-wav/**" \
+            --exclude ".DS_Store" \
+            --exclude "desktop.ini" \
+            --exclude "Thumbs.db" \
+            --exclude "._*" \
+            "${RCLONE_PERF_FLAGS[@]}"
+        echo "👱‍♀️ JENNA: All done! Your local files are perfectly synced."
+    else
+        echo "👱‍♀️ JENNA: Git pull complete! (DigitalOcean Spaces CDN sync skipped on this WiFi.)"
+    fi
 }
 
 function do_push() {
@@ -426,6 +557,8 @@ function do_push() {
     if [[ -z "$COMMIT_MSG" ]]; then
         COMMIT_MSG="Jenna: Automated sync for release $TAG_NAME"
     fi
+
+    run_github_preflight
 
     # --- PRE-FLIGHT TAG CHECK ---
     if [ -n "$TAG_NAME" ]; then
@@ -1067,23 +1200,26 @@ function do_push() {
     
     # 6. CDN SYNC (Public Assets Only - Vaults & Master-WAVs live locally in /raggiesoft-vaults)
     echo "   3. Beaming public web assets to the CDN (Vaults & Master-WAVs excluded)..."
-    
-    "$RCLONE_BIN" copy "$ASSETS_ROOT" do-spaces:assets.raggiesoft.com \
-        --config "$RCLONE_CONF" \
-        --exclude "/_workspace/**" \
-        --exclude "/.git/**" \
-        --exclude "**/vault/**" \
-        --exclude "**/vault-*/**" \
-        --exclude "**/master-wav/**" \
-        --exclude ".gitignore" \
-        --exclude ".DS_Store" \
-        --exclude "desktop.ini" \
-        --exclude "Thumbs.db" \
-        --exclude "._*" \
-        --s3-acl public-read \
-        "${RCLONE_PERF_FLAGS[@]}"
-        
-    echo "👱‍♀️ JENNA: Success! All public assets are live on the CDN, and your local vaults remain safely off DigitalOcean Spaces. Sarah will pick this up shortly."
+    run_cdn_preflight
+    if [ "$CAN_SYNC_CDN" = true ]; then
+        "$RCLONE_BIN" copy "$ASSETS_ROOT" do-spaces:assets.raggiesoft.com \
+            --config "$RCLONE_CONF" \
+            --exclude "/_workspace/**" \
+            --exclude "/.git/**" \
+            --exclude "**/vault/**" \
+            --exclude "**/vault-*/**" \
+            --exclude "**/master-wav/**" \
+            --exclude ".gitignore" \
+            --exclude ".DS_Store" \
+            --exclude "desktop.ini" \
+            --exclude "Thumbs.db" \
+            --exclude "._*" \
+            --s3-acl public-read \
+            "${RCLONE_PERF_FLAGS[@]}"
+        echo "👱‍♀️ JENNA: Success! All public assets are live on the CDN, and your local vaults remain safely off DigitalOcean Spaces. Sarah will pick this up shortly."
+    else
+        echo "👱‍♀️ JENNA: Finished! Code/narratives are committed (and pushed if GitHub was reachable); CDN sync was skipped because DigitalOcean Spaces is blocked on this WiFi."
+    fi
 }
 
 # --- UNIFIED ARGUMENT PARSER ---
@@ -1110,26 +1246,26 @@ done
 # Apply connection modifications based on parsing
 if [ "$USE_PUBLIC_WIFI" = true ]; then
     # Use a proper Bash array so spaces inside the full Chrome User-Agent string do not word-split into invalid rclone positional args.
-    # --fast-list collapses 400+ per-directory S3 LIST calls into ~19 bulk calls so --tpslimit doesn't stall for 7+ minutes.
     # --bind 0.0.0.0 prevents broken public-WiFi IPv6 blackholes, and --disable-http2 prevents DPI middleboxes from dropping Go HTTP/2 streams.
     RCLONE_PERF_FLAGS=(
         -P
-        --fast-list
         --transfers=2
         --checkers=4
         --tpslimit=4
-        --timeout=60s
-        --contimeout=15s
+        --timeout=15s
+        --contimeout=5s
+        --retries=1
+        --low-level-retries=1
         --bind 0.0.0.0
         --disable-http2
         --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     )
     # Bypass port 22 blocks on public WiFi by routing Git SSH over port 443 (with accept-new so [ssh.github.com]:443 never hangs on host key prompt)
-    export GIT_SSH_COMMAND="ssh -o Port=443 -o HostName=ssh.github.com -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
-    CONNECTION_MSG="🕵️‍♀️ CAMOUFLAGE MODE: Spoofing macOS Chrome User-Agent, HTTP/1.1 IPv4 fast-list, and routing Git via Port 443."
+    export GIT_SSH_COMMAND="ssh -o Port=443 -o HostName=ssh.github.com -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5"
+    CONNECTION_MSG="🕵️‍♀️ CAMOUFLAGE MODE: Spoofing macOS Chrome User-Agent, HTTP/1.1 IPv4, and routing Git via Port 443."
 else
-    RCLONE_PERF_FLAGS=(-P --transfers=8)
-    CONNECTION_MSG="🚀 STANDARD MODE: Maximum velocity."
+    RCLONE_PERF_FLAGS=(-P --transfers=8 --contimeout=5s --timeout=15s --retries=1 --low-level-retries=1)
+    CONNECTION_MSG="🚀 STANDARD MODE: Automatic 5-second pre-flight checks active."
 fi
 
 # Dispatch
