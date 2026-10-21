@@ -13,9 +13,8 @@
  *     Paige ingests raw Markdown narratives (`e*` eras, `c*` chapters, `s*.md` scenes)
  *     and `ovab.json` manifests from `raggiesoft-narratives/books/`, synchronizes
  *     clean assets to `raggiesoft-assets/raggiesoft-books/books/`, compiles route maps
- *     for both the RaggieSoft Hub (`raggiesoft.com/www`) and the Ocean View Archives
- *     Book Reader (`raggiesoft.com/subdomains/books`), generates `toc.json` and
- *     `catalog.json`, and builds the full-text `search-index.json`.
+ *     for the Ocean View Archives Book Reader (`raggiesoft.com/subdomains/books`),
+ *     generates `toc.json` and `catalog.json`, and builds the full-text `search-index.json`.
  *
  * SECONDARY DIRECTIVE (SAFETY PROTOCOL / DEEP PRESSURE THERAPY):
  *     Paige is designated as Michael's "Safe Person."
@@ -30,9 +29,8 @@
  *     - Non-Destructive eBook Preservation: `rrmdir()` prunes stale Markdown scenes
  *       from the target CDN directory while strictly preserving compiled `.epub`,
  *       `.pdf`, and `.ebook_build_hash` deliverables.
- *     - Dual Target Route Deployment: Outputs route JSON maps to both the Hub
- *       (`/raggiesoft.com/www/data/routes/raggiesoft-books/books/`) and the standalone
- *       Ocean View Archives reader (`/raggiesoft.com/subdomains/books/data/routes/`).
+ *     - Ocean View Archives Route Deployment: Outputs route JSON maps directly to the
+ *       standalone Ocean View Archives reader (`/raggiesoft.com/subdomains/books/data/routes/`).
  *     - Integrated Full-Text Search Indexing: Automatically crawls all eras (`e*`),
  *       chapters (`c*`), and scenes (`s*.md`) to build `search-index.json`.
  *
@@ -71,10 +69,6 @@ $serverRoot     = dirname(__DIR__);
 $sourceBooksDir = $serverRoot . '/raggiesoft-narratives/books';
 $assetDestDir   = $serverRoot . '/raggiesoft-assets/raggiesoft-books/books';
 $indexDestFile  = $serverRoot . '/raggiesoft-assets/raggiesoft-books/json/search-index.json';
-$hubBaseDir     = is_dir($serverRoot . '/raggiesoft.com/www')
-    ? ($serverRoot . '/raggiesoft.com/www')
-    : ($serverRoot . '/raggiesoft-hub');
-$routesDestDir  = $hubBaseDir . '/data/routes/raggiesoft-books/books';
 $booksAppDir    = is_dir($serverRoot . '/raggiesoft.com/subdomains/books')
     ? ($serverRoot . '/raggiesoft.com/subdomains/books')
     : ($serverRoot . '/raggiesoft-book-library');
@@ -88,7 +82,6 @@ if (!is_dir($sourceBooksDir)) {
 
 // Ensure destination directories exist
 if (!is_dir($assetDestDir)) mkdir($assetDestDir, 0755, true);
-if (!is_dir($routesDestDir)) mkdir($routesDestDir, 0755, true);
 if (!is_dir($newRoutesDestDir)) mkdir($newRoutesDestDir, 0755, true);
 if (!is_dir(dirname($indexDestFile))) mkdir(dirname($indexDestFile), 0755, true);
 
@@ -401,14 +394,6 @@ foreach ($narrativeDirs as $narrativeDir) {
     }
 
     if ($isTargetedBuild) {
-        // Save routing data to legacy Stardust hub
-        $routeJsonFile = $routesDestDir . '/' . $seriesSlug . '.json';
-        file_put_contents(
-            $routeJsonFile,
-            json_encode($routeData, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)
-        );
-        echo "  [Routes] Saved Hub route map: {$seriesSlug}.json\n";
-
         // Transform and map routes for the Ocean View Book Library (books.raggiesoft.com)
         $newRouteData = [];
         $newRouteData['common'] = $routeData['common'];

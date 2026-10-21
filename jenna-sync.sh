@@ -1254,7 +1254,7 @@ function do_push() {
     echo "   3. Beaming public web assets to the CDN (Vaults & Master-WAVs excluded)..."
     run_cdn_preflight
     if [ "$CAN_SYNC_CDN" = true ]; then
-        "$RCLONE_BIN" copy "$ASSETS_ROOT" do-spaces:assets.raggiesoft.com \
+        "$RCLONE_BIN" sync "$ASSETS_ROOT" do-spaces:assets.raggiesoft.com \
             --config "$RCLONE_CONF" \
             --exclude "/_workspace/**" \
             --exclude "/.git/**" \
@@ -1270,9 +1270,9 @@ function do_push() {
             "${RCLONE_PERF_FLAGS[@]}"
         if [ $? -ne 0 ]; then
             CDN_SYNC_HAD_ERROR=true
-            echo "⚠️  JENNA: DigitalOcean Spaces rclone copy reported an error."
+            echo "⚠️  JENNA: DigitalOcean Spaces rclone sync reported an error."
         else
-            echo "👱‍♀️ JENNA: Success! All public assets are live on the CDN, and your local vaults remain safely off DigitalOcean Spaces. Sarah will pick this up shortly."
+            echo "👱‍♀️ JENNA: Success! All public assets are synced 1:1 on the CDN (stale files pruned), and your local vaults remain safely off DigitalOcean Spaces. Sarah will pick this up shortly."
         fi
     else
         echo "👱‍♀️ JENNA: Finished! Code/narratives are committed (and pushed if GitHub was reachable); CDN sync was skipped because DigitalOcean Spaces is blocked on this WiFi."
