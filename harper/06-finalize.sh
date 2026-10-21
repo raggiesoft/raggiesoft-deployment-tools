@@ -34,7 +34,7 @@ find "$SEARCH_PATH" -name "*.bak" -type f -delete 2>/dev/null
 echo "🎧 HARPER: Finalizing the Search Index..."
 # Aggregate track-level metadata generated across albums into a unified search index
 if [ -s "$TEMP_SEARCH_INDEX" ]; then
-    jq -s '.' "$TEMP_SEARCH_INDEX" > "$METADATA_FILE"
+    jq -s '.' "$TEMP_SEARCH_INDEX" > "$METADATA_FILE" || HARPER_ARCHIVE_ERRORS=$((HARPER_ARCHIVE_ERRORS + 1))
     rm "$TEMP_SEARCH_INDEX"
     echo "   ✅ HARPER: Index saved to $METADATA_FILE"
 else
@@ -50,7 +50,7 @@ CATALOG_FILE="$CATALOG_DIR/master-catalog.json"
 echo "🎧 HARPER: Compiling the Master ISRC/ERR Catalog..."
 # Compile ISRC and internal IDs into a centralized master catalog
 if [ -s "$TEMP_CATALOG_INDEX" ]; then
-    jq -s '.' "$TEMP_CATALOG_INDEX" > "$CATALOG_FILE"
+    jq -s '.' "$TEMP_CATALOG_INDEX" > "$CATALOG_FILE" || HARPER_ARCHIVE_ERRORS=$((HARPER_ARCHIVE_ERRORS + 1))
     rm "$TEMP_CATALOG_INDEX"
     echo "   ✅ HARPER: Catalog saved to $CATALOG_FILE"
 else
@@ -82,4 +82,16 @@ if [ "$DURATION_HOURS" -gt 0 ]; then
     echo "   ⏱️  Total Processing Time: "$DURATION_HOURS"h "$DURATION_MIN"m "$DURATION_REM_SEC"s"
 else
     echo "   ⏱️  Total Processing Time: "$DURATION_MIN"m "$DURATION_REM_SEC"s"
+fi
+
+# --- ENFORCE ERRORLEVEL EXIT CODE CONTRACT ---
+if [ "${HARPER_AUDIO_ERRORS:-0}" -gt 0 ]; then
+    echo "⚠️  HARPER EXIT STATUS: ERRORLEVEL=${ERR_AUDIO_TRANSCODE_FAILED:-2} (ERR_AUDIO_TRANSCODE_FAILED — $HARPER_AUDIO_ERRORS audio transcode/BWF error(s) detected)."
+    exit "${ERR_AUDIO_TRANSCODE_FAILED:-2}"
+elif [ "${HARPER_ARCHIVE_ERRORS:-0}" -gt 0 ]; then
+    echo "⚠️  HARPER EXIT STATUS: ERRORLEVEL=${ERR_ARCHIVE_OR_CATALOG_FAILED:-3} (ERR_ARCHIVE_OR_CATALOG_FAILED — $HARPER_ARCHIVE_ERRORS archive/catalog error(s) detected)."
+    exit "${ERR_ARCHIVE_OR_CATALOG_FAILED:-3}"
+else
+    echo "✅ HARPER EXIT STATUS: ERRORLEVEL=${ERR_SUCCESS:-0} (ERR_SUCCESS — 100% of audio renders, archives, and JSON catalogs verified)."
+    exit "${ERR_SUCCESS:-0}"
 fi

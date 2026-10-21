@@ -55,7 +55,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
         
         # Zip the staged directory and cleanup
         pushd "$VAULT_TARGET/archives/staging_mp3" > /dev/null
-        "$SEVEN_ZIP_CMD" a -tzip -mx=5 "../${ARCHIVE_BASE_NAME}-mp3.zip" * 
+        "$SEVEN_ZIP_CMD" a -tzip -mx=5 "../${ARCHIVE_BASE_NAME}-mp3.zip" * || HARPER_ARCHIVE_ERRORS=$((HARPER_ARCHIVE_ERRORS + 1))
         popd > /dev/null
         rm -rf "$VAULT_TARGET/archives/staging_mp3"
     else
@@ -84,7 +84,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
         
         # Zip the staged directory and cleanup
         pushd "$VAULT_TARGET/archives/staging_ogg" > /dev/null
-        "$SEVEN_ZIP_CMD" a -tzip -mx=5 "../${ARCHIVE_BASE_NAME}-ogg.zip" * 
+        "$SEVEN_ZIP_CMD" a -tzip -mx=5 "../${ARCHIVE_BASE_NAME}-ogg.zip" * || HARPER_ARCHIVE_ERRORS=$((HARPER_ARCHIVE_ERRORS + 1))
         popd > /dev/null
         rm -rf "$VAULT_TARGET/archives/staging_ogg"
     else
@@ -113,7 +113,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
         
         # Use 7z solid archiving with maximum compression (-mx=9) to handle massive uncompressed audio
         pushd "$VAULT_TARGET/archives/staging_wav" > /dev/null
-        "$SEVEN_ZIP_CMD" a -t7z -mx=9 -ms=on "../${ARCHIVE_BASE_NAME}-wav.7z" * 
+        "$SEVEN_ZIP_CMD" a -t7z -mx=9 -ms=on "../${ARCHIVE_BASE_NAME}-wav.7z" * || HARPER_ARCHIVE_ERRORS=$((HARPER_ARCHIVE_ERRORS + 1))
         popd > /dev/null
         rm -rf "$VAULT_TARGET/archives/staging_wav"
     else
@@ -142,7 +142,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
         
         # Use 7z solid archiving for maximum efficiency on FLAC files
         pushd "$VAULT_TARGET/archives/staging_flac" > /dev/null
-        "$SEVEN_ZIP_CMD" a -t7z -mx=9 -ms=on "../${ARCHIVE_BASE_NAME}-flac.7z" * 
+        "$SEVEN_ZIP_CMD" a -t7z -mx=9 -ms=on "../${ARCHIVE_BASE_NAME}-flac.7z" * || HARPER_ARCHIVE_ERRORS=$((HARPER_ARCHIVE_ERRORS + 1))
         popd > /dev/null
         rm -rf "$VAULT_TARGET/archives/staging_flac"
     else
@@ -174,7 +174,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
         fi
         
         pushd "$VAULT_TARGET/archives/staging_standard" > /dev/null
-        "$SEVEN_ZIP_CMD" a -tzip -mx=5 "../${ARCHIVE_BASE_NAME}-standard-archive.zip" * 
+        "$SEVEN_ZIP_CMD" a -tzip -mx=5 "../${ARCHIVE_BASE_NAME}-standard-archive.zip" * || HARPER_ARCHIVE_ERRORS=$((HARPER_ARCHIVE_ERRORS + 1))
         popd > /dev/null
         rm -rf "$VAULT_TARGET/archives/staging_standard"
     else
@@ -203,7 +203,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
         fi
         
         pushd web-mp3/staging_free 
-        "$SEVEN_ZIP_CMD" a -tzip -mx=5 "../${ARCHIVE_BASE_NAME}-free-archive.zip" * 
+        "$SEVEN_ZIP_CMD" a -tzip -mx=5 "../${ARCHIVE_BASE_NAME}-free-archive.zip" * || HARPER_ARCHIVE_ERRORS=$((HARPER_ARCHIVE_ERRORS + 1))
         popd 
         
         rm -rf web-mp3/staging_free

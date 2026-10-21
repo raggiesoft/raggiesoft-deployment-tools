@@ -209,7 +209,7 @@ else
             -metadata copyright="CC BY-SA 4.0 - $REAL_RELEASE_YEAR Michael P. Ragsdale / RaggieSoft" \
             -metadata comment="Audio Generation: Suno. AI Elements: Vocals, Instrumentation, Composition. Human Elements: Lyrics, Narrative Lore. License: CC BY-SA 4.0. Commercial Rights Cleared." \
             -metadata ISRC="$ISRC_CODE" \
-            -c copy "$LOCAL_WAV"
+            -c copy "$LOCAL_WAV" || HARPER_AUDIO_ERRORS=$((HARPER_AUDIO_ERRORS + 1))
         fi
     fi
 

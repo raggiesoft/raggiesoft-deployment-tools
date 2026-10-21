@@ -90,11 +90,42 @@ if [ ! -f "$RCLONE_CONF" ]; then
     exit 1
 fi
 
-# 3. JENNA'S BRAIN (Functions)
+# 3. JENNA'S BRAIN (Functions & ERRORLEVEL Exit Code Contract)
+# ============================================================================
+# MS-DOS / POSIX Exit Code Table (ERRORLEVEL):
+#   0 = ERR_SUCCESS                    (100% complete: Builds + GitHub + CDN all succeeded)
+#   1 = ERR_FATAL_BUILD_OR_QA          (Missing args/binaries, QA fail, duplicate tag, or build error)
+#   2 = ERR_GITHUB_SYNC_FAILED         (Local build & CDN succeeded, but GitHub push/pull failed or was unreachable)
+#   3 = ERR_CDN_SYNC_FAILED            (Local build & GitHub succeeded, but DO Spaces rclone failed or was unreachable)
+#   4 = ERR_NETWORK_OFFLINE_LOCAL_ONLY (Both GitHub and DO Spaces were unreachable/failed; committed locally only)
+# ============================================================================
+readonly ERR_SUCCESS=0
+readonly ERR_FATAL_BUILD_OR_QA=1
+readonly ERR_GITHUB_SYNC_FAILED=2
+readonly ERR_CDN_SYNC_FAILED=3
+readonly ERR_NETWORK_OFFLINE_LOCAL_ONLY=4
 
-# Global Connectivity State Flags (Populated by 5-second pre-flight probes)
+# Global Connectivity & Error State Flags (Populated by 5-second pre-flight probes & sync steps)
 CAN_PUSH_GITHUB=true
 CAN_SYNC_CDN=true
+GITHUB_SYNC_HAD_ERROR=false
+CDN_SYNC_HAD_ERROR=false
+
+function finalize_jenna_exit() {
+    if [ "$GITHUB_SYNC_HAD_ERROR" = true ] && [ "$CDN_SYNC_HAD_ERROR" = true ]; then
+        echo "⚠️  JENNA EXIT STATUS: ERRORLEVEL=$ERR_NETWORK_OFFLINE_LOCAL_ONLY (ERR_NETWORK_OFFLINE_LOCAL_ONLY — Built & committed locally; both GitHub & CDN unreachable/failed)."
+        exit "$ERR_NETWORK_OFFLINE_LOCAL_ONLY"
+    elif [ "$GITHUB_SYNC_HAD_ERROR" = true ]; then
+        echo "⚠️  JENNA EXIT STATUS: ERRORLEVEL=$ERR_GITHUB_SYNC_FAILED (ERR_GITHUB_SYNC_FAILED — CDN synced, but GitHub push/pull failed or was unreachable)."
+        exit "$ERR_GITHUB_SYNC_FAILED"
+    elif [ "$CDN_SYNC_HAD_ERROR" = true ]; then
+        echo "⚠️  JENNA EXIT STATUS: ERRORLEVEL=$ERR_CDN_SYNC_FAILED (ERR_CDN_SYNC_FAILED — GitHub synced, but DigitalOcean Spaces rclone failed or was unreachable)."
+        exit "$ERR_CDN_SYNC_FAILED"
+    else
+        echo "✅ JENNA EXIT STATUS: ERRORLEVEL=$ERR_SUCCESS (ERR_SUCCESS — 100% of builds, GitHub repos, and CDN assets synced)."
+        exit "$ERR_SUCCESS"
+    fi
+}
 
 # ============================================================================
 # Helper: run_with_timeout <seconds> <command...>
@@ -163,6 +194,7 @@ function run_github_preflight() {
         CAN_PUSH_GITHUB=true
     else
         CAN_PUSH_GITHUB=false
+        GITHUB_SYNC_HAD_ERROR=true
         echo "⚠️  JENNA PRE-FLIGHT: GitHub did not respond within 5 seconds on this network."
         echo "      -> Local builds and Git commits will still run; remote pushes will be skipped."
     fi
@@ -191,6 +223,7 @@ function run_cdn_preflight() {
         echo "      ✓ DigitalOcean Spaces CDN reachable (<5s)."
     else
         CAN_SYNC_CDN=false
+        CDN_SYNC_HAD_ERROR=true
         echo "⚠️  JENNA PRE-FLIGHT: DigitalOcean Spaces blocked or timed out (>5s) on this WiFi."
         echo "      -> Skipping rclone CDN sync (will sync automatically next time Spaces is reachable)."
     fi
@@ -202,13 +235,26 @@ function run_cdn_preflight() {
 # Local git operations (add, commit, status, diff-index, tag, log, rev-parse)
 # execute directly via `command git`. Remote network operations (push, pull,
 # fetch, clone, ls-remote) check CAN_PUSH_GITHUB first so offline/restricted
-# WiFi runs never hang.
+# WiFi runs never hang, and record any push/pull/clone failures for ERRORLEVEL.
 function git() {
     case "$1" in
-        push|pull|fetch|clone|ls-remote)
+        push|pull|clone)
             if [ "$CAN_PUSH_GITHUB" != true ]; then
+                GITHUB_SYNC_HAD_ERROR=true
                 echo "      ⚠️  [GitHub Unreachable] Skipping 'git $*' (saved locally)."
-                return 0
+                return 1
+            fi
+            command git "$@"
+            local rc=$?
+            if [ $rc -ne 0 ]; then
+                GITHUB_SYNC_HAD_ERROR=true
+            fi
+            return $rc
+            ;;
+        fetch|ls-remote)
+            if [ "$CAN_PUSH_GITHUB" != true ]; then
+                echo "      ⚠️  [GitHub Unreachable] Skipping 'git $*'."
+                return 1
             fi
             command git "$@"
             ;;
@@ -541,10 +587,16 @@ function do_pull() {
             --exclude "Thumbs.db" \
             --exclude "._*" \
             "${RCLONE_PERF_FLAGS[@]}"
-        echo "👱‍♀️ JENNA: All done! Your local files are perfectly synced."
+        if [ $? -ne 0 ]; then
+            CDN_SYNC_HAD_ERROR=true
+            echo "⚠️  JENNA: DigitalOcean Spaces rclone sync reported an error."
+        else
+            echo "👱‍♀️ JENNA: All done! Your local files are perfectly synced."
+        fi
     else
         echo "👱‍♀️ JENNA: Git pull complete! (DigitalOcean Spaces CDN sync skipped on this WiFi.)"
     fi
+    finalize_jenna_exit
 }
 
 function do_push() {
@@ -1216,10 +1268,16 @@ function do_push() {
             --exclude "._*" \
             --s3-acl public-read \
             "${RCLONE_PERF_FLAGS[@]}"
-        echo "👱‍♀️ JENNA: Success! All public assets are live on the CDN, and your local vaults remain safely off DigitalOcean Spaces. Sarah will pick this up shortly."
+        if [ $? -ne 0 ]; then
+            CDN_SYNC_HAD_ERROR=true
+            echo "⚠️  JENNA: DigitalOcean Spaces rclone copy reported an error."
+        else
+            echo "👱‍♀️ JENNA: Success! All public assets are live on the CDN, and your local vaults remain safely off DigitalOcean Spaces. Sarah will pick this up shortly."
+        fi
     else
         echo "👱‍♀️ JENNA: Finished! Code/narratives are committed (and pushed if GitHub was reachable); CDN sync was skipped because DigitalOcean Spaces is blocked on this WiFi."
     fi
+    finalize_jenna_exit
 }
 
 # --- UNIFIED ARGUMENT PARSER ---

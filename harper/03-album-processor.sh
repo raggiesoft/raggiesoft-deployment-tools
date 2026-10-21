@@ -50,8 +50,8 @@ find "$SEARCH_PATH" -name "album.json" | while read album_file; do
     fi
 done
 
-# Sort numerically by year, then extract the file path
-sort -n "$TEMP_SORTED_ALBUMS" | cut -d'|' -f2 | while read tracks_file; do
+# Sort numerically by year, then extract the file path (using process substitution so the loop executes in the main shell and preserves ERRORLEVEL state)
+while read -r tracks_file; do
     
     album_dir=`dirname "$tracks_file"`
     # Context switch into the specific album directory
@@ -270,8 +270,9 @@ sort -n "$TEMP_SORTED_ALBUMS" | cut -d'|' -f2 | while read tracks_file; do
             wait "$pid"
             EXIT_CODE=$?
             if [ $EXIT_CODE -ne 0 ]; then
-                echo "🛑 HARPER FATAL ERROR: Audio processing crashed on PID $pid!"
-                exit 1
+                echo "🛑 HARPER FATAL ERROR: Audio processing crashed on PID $pid (ERRORLEVEL=${ERR_AUDIO_TRANSCODE_FAILED:-2})!"
+                HARPER_AUDIO_ERRORS=$((HARPER_AUDIO_ERRORS + 1))
+                exit "${ERR_AUDIO_TRANSCODE_FAILED:-2}"
             fi
         done
         echo "      ✅ HARPER: All multi-tier audio verified."
@@ -313,4 +314,4 @@ sort -n "$TEMP_SORTED_ALBUMS" | cut -d'|' -f2 | while read tracks_file; do
     
     rm "$README_FILE"
     popd > /dev/null
-done
+done < <(sort -n "$TEMP_SORTED_ALBUMS" | cut -d'|' -f2)

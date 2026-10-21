@@ -14,6 +14,18 @@
 # - If path structures change in `engine-room-records/artists`, update SEARCH_PATH.
 # ==============================================================================
 
+# --- ERRORLEVEL / EXIT CODE CONTRACT ---
+#   0 = ERR_SUCCESS                    (100% of audio renders, archives, and JSON catalogs succeeded)
+#   1 = ERR_FATAL_INIT                 (Missing modules, invalid CLI parameter, missing path, or iGPU lock)
+#   2 = ERR_AUDIO_TRANSCODE_FAILED     (One or more FFmpeg BWF stamps or multi-tier transcodes failed)
+#   3 = ERR_ARCHIVE_OR_CATALOG_FAILED  (One or more 7-Zip archives or jq JSON catalog builds failed)
+readonly ERR_SUCCESS=0
+readonly ERR_FATAL_INIT=1
+readonly ERR_AUDIO_TRANSCODE_FAILED=2
+readonly ERR_ARCHIVE_OR_CATALOG_FAILED=3
+export HARPER_AUDIO_ERRORS=0
+export HARPER_ARCHIVE_ERRORS=0
+
 # --- PATH CONFIGURATION ---
 # Define the root path for artist records and metadata (resolved from /raggiesoft-deployment-tools)
 SEARCH_PATH="../raggiesoft-assets/engine-room-records/artists"

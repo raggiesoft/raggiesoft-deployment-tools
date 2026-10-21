@@ -40,6 +40,7 @@ press_audio_formats() {
     
     # Define the universal AI disclosure stamp required for copyright transparency
     local ai_disclaimer="Audio Generation: Suno. AI Elements: Vocals, Instrumentation, Composition. Human Elements: Lyrics, Narrative Lore. CC BY-SA 4.0. Commercial Rights Cleared."
+    local transcode_err=0
 
     # --------------------------------------------------------------------------
     # Tier 1: Radio Edit (128kbps MP3)
@@ -54,7 +55,7 @@ press_audio_formats() {
         -metadata TSRC="$t_isrc" -metadata ISRC="$t_isrc" \
         -metadata publisher="Engine Room Records" -metadata copyright="CC BY-SA 4.0 - $t_year Michael P. Ragsdale / RaggieSoft" \
         -metadata comment="Free Stream Edition | $ai_disclaimer" \
-        "web-mp3/$f_base.mp3"
+        "web-mp3/$f_base.mp3" || transcode_err=1
     fi
 
     local vault_dir="${ALBUM_VAULT_DIR:-vault}"
@@ -72,7 +73,7 @@ press_audio_formats() {
         -metadata TSRC="$t_isrc" -metadata ISRC="$t_isrc" \
         -metadata publisher="Engine Room Records" -metadata copyright="CC BY-SA 4.0 - $t_year Michael P. Ragsdale / RaggieSoft" \
         -metadata comment="Premium Archive | $ai_disclaimer" \
-        "$vault_dir/mp3/$f_base.mp3"
+        "$vault_dir/mp3/$f_base.mp3" || transcode_err=1
     fi
 
     # --------------------------------------------------------------------------
@@ -89,7 +90,7 @@ press_audio_formats() {
         -metadata ISRC="$t_isrc" \
         -metadata publisher="Engine Room Records" -metadata copyright="CC BY-SA 4.0 - $t_year Michael P. Ragsdale / RaggieSoft" \
         -metadata comment="Premium Archive | $ai_disclaimer" \
-        "$vault_dir/ogg/$f_base.ogg"
+        "$vault_dir/ogg/$f_base.ogg" || transcode_err=1
     fi
 
     # --------------------------------------------------------------------------
@@ -106,6 +107,8 @@ press_audio_formats() {
         -metadata ISRC="$t_isrc" \
         -metadata publisher="Engine Room Records" -metadata copyright="CC BY-SA 4.0 - $t_year Michael P. Ragsdale / RaggieSoft" \
         -metadata comment="Premium Audiophile Archive | $ai_disclaimer" \
-        "$vault_dir/flac/$f_base.flac"
+        "$vault_dir/flac/$f_base.flac" || transcode_err=1
     fi
+
+    return "$transcode_err"
 }
