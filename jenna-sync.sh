@@ -411,7 +411,7 @@ function do_pull() {
         --exclude "desktop.ini" \
         --exclude "Thumbs.db" \
         --exclude "._*" \
-        $RCLONE_PERF_FLAGS
+        "${RCLONE_PERF_FLAGS[@]}"
         
     echo "👱‍♀️ JENNA: All done! Your local files are perfectly synced."
 }
@@ -1081,7 +1081,7 @@ function do_push() {
         --exclude "Thumbs.db" \
         --exclude "._*" \
         --s3-acl public-read \
-        $RCLONE_PERF_FLAGS
+        "${RCLONE_PERF_FLAGS[@]}"
         
     echo "👱‍♀️ JENNA: Success! All public assets are live on the CDN, and your local vaults remain safely off DigitalOcean Spaces. Sarah will pick this up shortly."
 }
@@ -1109,12 +1109,26 @@ done
 
 # Apply connection modifications based on parsing
 if [ "$USE_PUBLIC_WIFI" = true ]; then
-    RCLONE_PERF_FLAGS="-P --transfers=1 --tpslimit=1 --timeout=60s --user-agent Mozilla/5.0"
-    # Bypass port 22 blocks on public WiFi by routing Git SSH over port 443
-    export GIT_SSH_COMMAND="ssh -o Port=443 -o HostName=ssh.github.com"
-    CONNECTION_MSG="🕵️‍♀️ CAMOUFLAGE MODE: Spoofing Chrome User-Agent and routing Git via Port 443."
+    # Use a proper Bash array so spaces inside the full Chrome User-Agent string do not word-split into invalid rclone positional args.
+    # --fast-list collapses 400+ per-directory S3 LIST calls into ~19 bulk calls so --tpslimit doesn't stall for 7+ minutes.
+    # --bind 0.0.0.0 prevents broken public-WiFi IPv6 blackholes, and --disable-http2 prevents DPI middleboxes from dropping Go HTTP/2 streams.
+    RCLONE_PERF_FLAGS=(
+        -P
+        --fast-list
+        --transfers=2
+        --checkers=4
+        --tpslimit=4
+        --timeout=60s
+        --contimeout=15s
+        --bind 0.0.0.0
+        --disable-http2
+        --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    )
+    # Bypass port 22 blocks on public WiFi by routing Git SSH over port 443 (with accept-new so [ssh.github.com]:443 never hangs on host key prompt)
+    export GIT_SSH_COMMAND="ssh -o Port=443 -o HostName=ssh.github.com -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
+    CONNECTION_MSG="🕵️‍♀️ CAMOUFLAGE MODE: Spoofing macOS Chrome User-Agent, HTTP/1.1 IPv4 fast-list, and routing Git via Port 443."
 else
-    RCLONE_PERF_FLAGS="-P --transfers=8"
+    RCLONE_PERF_FLAGS=(-P --transfers=8)
     CONNECTION_MSG="🚀 STANDARD MODE: Maximum velocity."
 fi
 
