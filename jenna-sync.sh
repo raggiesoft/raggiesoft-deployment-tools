@@ -58,6 +58,7 @@ ENGINEROOM_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/engineroom"
 STARDUST_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/stardust"
 CORPORATE_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/corporate"
 STORETRAINER_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/storetrainer"
+BACKSTAGE_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/backstage"
 PORTFOLIO_ROOT="$SERVER_ROOT/michaelpragsdale.com/www"
 DEPLOYMENT_TOOLS_ROOT="$SERVER_ROOT/raggiesoft-deployment-tools"
 NGINX_CONFIG_ROOT="$SERVER_ROOT/nginx-config"
@@ -1089,6 +1090,35 @@ function do_push() {
                 echo "      ✓ Pending RaggieSoft StoreTrainer code sent to GitHub."
             else
                 echo "      (RaggieSoft StoreTrainer is clean and up to date.)"
+            fi
+        fi
+    fi
+
+    # 4.99 RAGGIESOFT BACKSTAGE PUSH (backstage.raggiesoft.com)
+    if [ -d "$BACKSTAGE_ROOT" ] && [ -f "$BACKSTAGE_ROOT/package.json" ]; then
+        echo "   -> Packaging RaggieSoft Backstage (backstage.raggiesoft.com)..."
+        cd "$BACKSTAGE_ROOT"
+        export PATH="/opt/homebrew/bin:$PATH"
+        npm run build
+        if [ $? -ne 0 ]; then
+            echo "🛑 JENNA: ABORTING! Web Awesome Pro SSG build failed in backstage.raggiesoft.com."
+            exit 1
+        fi
+        if [ -d "$BACKSTAGE_ROOT/.git" ]; then
+            git add -A
+            if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
+                git commit -m "$COMMIT_MSG"
+                if git remote get-url origin &>/dev/null; then
+                    git push -u $FORCE_FLAG origin main
+                    echo "      ✓ RaggieSoft Backstage committed and sent to GitHub."
+                else
+                    echo "      ✓ RaggieSoft Backstage committed locally (awaiting GitHub 'origin' remote)."
+                fi
+            elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
+                git push -u $FORCE_FLAG origin main
+                echo "      ✓ Pending RaggieSoft Backstage code sent to GitHub."
+            else
+                echo "      (RaggieSoft Backstage is clean and up to date.)"
             fi
         fi
     fi

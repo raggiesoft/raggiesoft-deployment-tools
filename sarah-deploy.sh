@@ -209,3 +209,8 @@ deploy_site "RaggieSoft Media" "/home/michael/raggiesoft-corporate" "/var/www/co
 # Syncs the pre-compiled Vanilla TypeScript + Classic Win32/Netscape 4.78 static bundle (/dist) into /var/www/storetrainer.raggiesoft.com
 deploy_site "StoreTrainer" "/home/michael/raggiesoft-storetrainer" "/var/www/storetrainer.raggiesoft.com" "/home/michael/raggiesoft-storetrainer/dist"
 
+# 11. PROCESS RAGGIESOFT BACKSTAGE (backstage.raggiesoft.com)
+# Syncs the pre-compiled Web Awesome Pro + Font Awesome Pro+ PWA static bundle (/dist) into /var/www/backstage.raggiesoft.com
+deploy_site "Backstage" "/home/michael/raggiesoft-backstage" "/var/www/backstage.raggiesoft.com" "/home/michael/raggiesoft-backstage/dist"
+
+

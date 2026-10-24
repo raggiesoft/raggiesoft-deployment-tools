@@ -57,6 +57,7 @@ WEB_ROOTS=(
     "/var/www/stardust.raggiesoft.com"
     "/var/www/corporate.raggiesoft.com"
     "/var/www/storetrainer.raggiesoft.com"
+    "/var/www/backstage.raggiesoft.com"
     "/var/www/nebulae.raggiesoft.com"
     "/var/www/music.raggiesoft.com"
     "/var/www/lore.raggiesoft.com"
@@ -83,6 +84,7 @@ REPOS=(
     "raggiesoft-stardust-engine"
     "raggiesoft-corporate"
     "raggiesoft-storetrainer"
+    "raggiesoft-backstage"
 )
 
 for repo in "${REPOS[@]}"; do
@@ -103,6 +105,7 @@ VHOSTS=(
     "stardust.raggiesoft.com.conf"
     "corporate.raggiesoft.com.conf"
     "storetrainer.raggiesoft.com.conf"
+    "backstage.raggiesoft.com.conf"
     "nebulae.raggiesoft.com.conf"
     "music.raggiesoft.com.conf"
     "books.raggiesoft.com.conf"
@@ -133,6 +136,7 @@ echo "   • https://engineroom.raggiesoft.com (Engine Room Records - Astro 6)"
 echo "   • https://stardust.raggiesoft.com   (The Stardust Engine - Nuxt 4 + Vue 3)"
 echo "   • https://corporate.raggiesoft.com  (RaggieSoft Media - Bootstrap 5.3.8)"
 echo "   • https://storetrainer.raggiesoft.com (StoreTrainer - Vanilla TS + Win98)"
+echo "   • https://backstage.raggiesoft.com  (RaggieSoft Backstage - Web Awesome Pro PWA)"
 echo "   • https://nebulae.raggiesoft.com    (Cosmic Observatory Master Sitemap)"
 echo "   • https://music.raggiesoft.com      (The Listening Room - SvelteKit 2)"
 echo "   • https://books.raggiesoft.com      (Ocean View Archives Book Reader)"
