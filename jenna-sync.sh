@@ -13,7 +13,10 @@
 # 2. Asset Synchronization: Uses `rclone` to push/pull binaries to a remote CDN (do-spaces).
 # 3. Build & Minification: Executes local PHP scripts to minify CSS/JS and compile static assets.
 # 4. QA & Auditing: Runs PHP-based tests (Integrity Check, Orphan Audit) before allowing a push.
-# 5. Evasion Tactics: Includes a `--public-wifi` stealth mode to bypass restrictive firewalls (port 443).
+# 5. Automatic Pre-Flight Connectivity Probes: Automatically tests GitHub (SSH Port 22,
+#    automatic fallback to SSH over Port 443, and HTTPS Port 443) and DigitalOcean Spaces CDN
+#    within 5 seconds, reporting back whether each connection works or cleanly falling back
+#    to local-only builds/commits if offline or blocked.
 #
 # Maintenance Notes:
 # - Do NOT execute this script locally unless you are preparing a full production sync.
@@ -23,8 +26,9 @@
 # ============================================================================
 
 # --- JENNA: THE DEVELOPMENT LIAISON (v7.3 - Force Push Edition) ---
-# Usage: ./jenna-sync.sh --push -m "Message" [-t "v1.0.0"] [--force] [--public-wifi]
-#        ./jenna-sync.sh --pull [--public-wifi]
+# Usage: ./jenna-sync.sh --push -m "Message" [-t "v1.0.0"] [--force]
+#        ./jenna-sync.sh --pull
+#        ./jenna-sync.sh --audit
 
 # --- OS-SPECIFIC OVERRIDES ---
 # If running on macOS (darwin) and `caffeinate` is available, ensure the system doesn't sleep during long syncs.
@@ -153,26 +157,24 @@ function run_with_timeout() {
 # ============================================================================
 # Helper: run_github_preflight (5-Second Automatic GitHub Probe)
 # ============================================================================
-# Probes GitHub reachability within 5 seconds without needing --public-wifi:
-# 1. Tests standard SSH on Port 22 (unless --public-wifi already forced Port 443).
+# Automatically probes GitHub reachability within 5 seconds:
+# 1. Tests standard SSH on Port 22 and reports back if reachable.
 # 2. If Port 22 is blocked/timed out, automatically falls back to SSH over Port 443
 #    (ssh.github.com:443) and tests within 5 seconds.
 # 3. Also tests HTTPS git reachability within 5 seconds.
-# 4. If unreachable, sets CAN_PUSH_GITHUB=false so Jenna still builds and commits
-#    locally while cleanly skipping network git push/pull/fetch commands.
+# 4. If unreachable, reports back and sets CAN_PUSH_GITHUB=false so Jenna still builds
+#    and commits locally while cleanly skipping network git push/pull/fetch commands.
 function run_github_preflight() {
     echo "👱‍♀️ JENNA: Running 5-second GitHub pre-flight check..."
     export GIT_HTTP_LOW_SPEED_LIMIT=1000
     export GIT_HTTP_LOW_SPEED_TIME=5
 
     local ssh_ok=false
-    if [ "$USE_PUBLIC_WIFI" != true ]; then
-        local out22
-        out22=$(run_with_timeout 5 ssh -T -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=accept-new git@github.com 2>&1)
-        if echo "$out22" | grep -qi "successfully authenticated"; then
-            ssh_ok=true
-            echo "      ✓ GitHub SSH (Port 22) reachable."
-        fi
+    local out22
+    out22=$(run_with_timeout 5 ssh -T -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=accept-new git@github.com 2>&1)
+    if echo "$out22" | grep -qi "successfully authenticated"; then
+        ssh_ok=true
+        echo "      ✓ GitHub SSH (Port 22) reachable."
     fi
 
     if [ "$ssh_ok" = false ]; then
@@ -270,7 +272,7 @@ function show_help() {
     echo "  ./jenna-sync.sh --push -m \"Commit Message\" [-t \"v1.0.0\"] [--force]"
     echo "  ./jenna-sync.sh --pull"
     echo "  ./jenna-sync.sh --audit"
-    echo "Options: --public-wifi (Stealth mode)"
+    echo "Note: Jenna automatically tests GitHub & CDN connectivity (5s pre-flight probe) and reports back."
 }
 
 function run_integrity_check() {
@@ -1314,7 +1316,6 @@ function do_push() {
 ACTION=""
 COMMIT_MSG=""
 TAG_NAME=""
-USE_PUBLIC_WIFI=false
 FORCE_FLAG=""
 
 while [[ "$#" -gt 0 ]]; do
@@ -1325,36 +1326,13 @@ while [[ "$#" -gt 0 ]]; do
         --force) FORCE_FLAG="--force" ;;
         --msg|-m) COMMIT_MSG="$2"; shift ;;
         --tag|-t) TAG_NAME="$2"; shift ;;
-        --public-wifi) USE_PUBLIC_WIFI=true ;;
         *) echo "👱‍♀️ JENNA: I don't recognize the command '$1'."; show_help; exit 1 ;;
     esac
     shift
 done
 
-# Apply connection modifications based on parsing
-if [ "$USE_PUBLIC_WIFI" = true ]; then
-    # Use a proper Bash array so spaces inside the full Chrome User-Agent string do not word-split into invalid rclone positional args.
-    # --bind 0.0.0.0 prevents broken public-WiFi IPv6 blackholes, and --disable-http2 prevents DPI middleboxes from dropping Go HTTP/2 streams.
-    RCLONE_PERF_FLAGS=(
-        -P
-        --transfers=2
-        --checkers=4
-        --tpslimit=4
-        --timeout=15s
-        --contimeout=5s
-        --retries=1
-        --low-level-retries=1
-        --bind 0.0.0.0
-        --disable-http2
-        --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    )
-    # Bypass port 22 blocks on public WiFi by routing Git SSH over port 443 (with accept-new so [ssh.github.com]:443 never hangs on host key prompt)
-    export GIT_SSH_COMMAND="ssh -o Port=443 -o HostName=ssh.github.com -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5"
-    CONNECTION_MSG="🕵️‍♀️ CAMOUFLAGE MODE: Spoofing macOS Chrome User-Agent, HTTP/1.1 IPv4, and routing Git via Port 443."
-else
-    RCLONE_PERF_FLAGS=(-P --transfers=8 --contimeout=5s --timeout=15s --retries=1 --low-level-retries=1)
-    CONNECTION_MSG="🚀 STANDARD MODE: Automatic 5-second pre-flight checks active."
-fi
+RCLONE_PERF_FLAGS=(-P --transfers=8 --contimeout=5s --timeout=15s --retries=1 --low-level-retries=1)
+CONNECTION_MSG="🚀 AUTOMATIC PRE-FLIGHT MODE: 5-second GitHub & CDN connection tests active."
 
 # Dispatch
 case "$ACTION" in

@@ -10,7 +10,7 @@
  * "I am Michael's sister. I process his books, and I keep him safe."
  *
  * PRIMARY DIRECTIVE:
- *     Paige ingests raw Markdown narratives (`e*` eras, `c*` chapters, `s*.md` scenes)
+ *     Paige ingests raw Markdown narratives (`e*` eras, `c*` chapters, `p*.md` parts)
  *     and `ovab.json` manifests from `raggiesoft-narratives/books/`, synchronizes
  *     clean assets to `raggiesoft-assets/raggiesoft-books/books/`, compiles route maps
  *     for the Ocean View Archives Book Reader (`raggiesoft.com/subdomains/books`),
@@ -384,39 +384,50 @@ foreach ($narrativeDirs as $narrativeDir) {
                 "filePath" => "__CHAP_TOC__|{$bIndex}|{$cIndex}"
             ];
 
-            // Track structure for auto-generated TOC
+            // Track structure for auto-generated TOC (`parts` array inside each chapter)
             $tocChap = [
                 'chap_num' => $chapNum,
                 'chap_title' => $chapTitle,
                 'chap_url' => $chapRouteUrl,
-                'scenes' => []
+                'parts' => []
             ];
 
-            // Auto-discover individual scene markdown files strictly based on 's*.md'
-            $pFiles = glob($cDir . '/s*.md');
+            // Auto-discover individual part markdown files strictly based on 'p*.md'
+            $pFiles = glob($cDir . '/p*.md');
             sort($pFiles);
+            $chapPartCount = count($pFiles);
 
             foreach ($pFiles as $pIndex => $pFile) {
                 $pName = basename($pFile);
-                $sceneNum = intval(str_replace(['s', '.md'], '', $pName));
+                $partNum = intval(str_replace(['p', '.md'], '', $pName));
 
-                $yamlTitle = "Scene {$sceneNum}";
+                $yamlTitle = "Part {$partNum}";
                 $partContent = file_get_contents($pFile);
                 $bodyWithoutFrontmatter = $partContent;
 
-                // Extract title from scene's YAML frontmatter using regex and strip frontmatter for search index
+                // Extract title from part's YAML frontmatter using regex and strip frontmatter for search index
                 if (preg_match('/^---([\s\S]*?)---/', ltrim($partContent), $matches)) {
                     $bodyWithoutFrontmatter = str_replace($matches[0], '', $partContent);
                     if (preg_match('/^title:\s*"?([^"\r\n]+)"?/m', $matches[1], $m)) {
-                        $yamlTitle = trim($m[1]);
+                        $extractedTitle = trim($m[1]);
+                        if ($extractedTitle !== '' && strcasecmp($extractedTitle, 'Untitled Chapter') !== 0 && strcasecmp($extractedTitle, 'Untitled') !== 0) {
+                            $yamlTitle = $extractedTitle;
+                        } elseif ($chapPartCount === 1) {
+                            $yamlTitle = preg_replace('/^Chapter\s+\d+:\s*/i', '', $chapTitle);
+                        }
                     }
                 }
 
-                $sceneTitle = "Scene {$sceneNum}: {$yamlTitle}";
-                $sceneSlug = slugify(strip_tags($sceneTitle));
+                // Smart Polish (Option 1 + Idea 3):
+                // - When a Chapter has 2+ Parts, display "Part X: <Title>".
+                // - When a Chapter has only 1 Part, omit the redundant "Part 1:" prefix.
+                $partTitle = ($chapPartCount > 1)
+                    ? "Part {$partNum}: {$yamlTitle}"
+                    : $yamlTitle;
+                $partSlug = slugify(strip_tags($partTitle));
 
                 // Construct final content route
-                $routeUrl = "/raggiesoft-books/books/{$seriesSlug}/{$eraSlug}/{$chapSlug}/{$sceneSlug}";
+                $routeUrl = "/raggiesoft-books/books/{$seriesSlug}/{$eraSlug}/{$chapSlug}/{$partSlug}";
                 if ($firstRouteUrl === null) {
                     $firstRouteUrl = $routeUrl; // Capture the very first reading route
                 }
@@ -424,20 +435,20 @@ foreach ($narrativeDirs as $narrativeDir) {
                 $relPath = str_replace($narrativeDir . '/', '', $pFile);
                 $routeData[$routeUrl] = [
                     "view" => "pages/raggiesoft-books/books/viewer",
-                    "title" => $sceneTitle,
+                    "title" => $partTitle,
                     "theme" => "raggiesoft-books",
                     "filePath" => $relPath
                 ];
-                $lastRouteUrl = $routeUrl; // Continually update to capture the very last scene
+                $lastRouteUrl = $routeUrl; // Continually update to capture the very last part
 
-                // Finalize TOC structure with scenes
-                $tocChap['scenes'][] = [
-                    'scene_num' => $sceneNum,
-                    'scene_title' => $sceneTitle,
+                // Finalize TOC structure with parts
+                $tocChap['parts'][] = [
+                    'part_num' => $partNum,
+                    'part_title' => $partTitle,
                     'file_path' => $relPath
                 ];
 
-                // Clean the scene body text and add to the full-text search index
+                // Clean the part body text and add to the full-text search index
                 $cleanBody = strip_tags($bodyWithoutFrontmatter);
                 $cleanBody = preg_replace('/[#_*\[\]>]/', '', $cleanBody);
                 $cleanBody = preg_replace('/\s+/', ' ', $cleanBody);
@@ -447,7 +458,7 @@ foreach ($narrativeDirs as $narrativeDir) {
                     'series' => $seriesTitle,
                     'book' => $eraTitle,
                     'chapter' => $chapTitle,
-                    'title' => $sceneTitle,
+                    'title' => $partTitle,
                     'url' => $routeUrl,
                     'content' => $cleanBody
                 ];
@@ -544,7 +555,7 @@ echo "  [Sizes] eBook file sizes manifest saved to: {$ebookSizesManifestFile}\n"
 
 // Write the full-text search index file
 file_put_contents($indexDestFile, json_encode($searchIndex, JSON_UNESCAPED_SLASHES));
-echo "  [Search] Full-text search index (" . count($searchIndex) . " scenes) saved to: {$indexDestFile}\n";
+echo "  [Search] Full-text search index (" . count($searchIndex) . " parts) saved to: {$indexDestFile}\n";
 
 echo "========================================================\n";
 echo "👩‍🏫 PAIGE: All done, Michael. Every book is indexed and safe on the shelves.\n";
