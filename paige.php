@@ -154,6 +154,76 @@ function slugify($string) {
     return preg_replace('/-+/', '-', $slug);
 }
 
+/**
+ * Formats a raw byte count into a pleasant, human-readable file size string
+ * (e.g., "36.8 MB", "2.8 MB", "690 KB", "5.3 KB") for eBook download links.
+ *
+ * @param int $bytes Raw file size in bytes.
+ * @return string Pleasant human-readable size string, or empty string if invalid.
+ */
+function formatEbookFileSize(int $bytes): string {
+    if ($bytes <= 0) {
+        return '';
+    }
+    if ($bytes < 1024) {
+        return $bytes . ' B';
+    }
+    $kb = $bytes / 1024;
+    if ($kb < 1024) {
+        if ($kb < 10) {
+            $formatted = rtrim(rtrim(number_format($kb, 1, '.', ''), '0'), '.');
+            return $formatted . ' KB';
+        }
+        return (string)round($kb) . ' KB';
+    }
+    $mb = $bytes / 1048576;
+    if ($mb < 1024) {
+        $formatted = rtrim(rtrim(number_format($mb, 1, '.', ''), '0'), '.');
+        return $formatted . ' MB';
+    }
+    $gb = $bytes / 1073741824;
+    $formatted = rtrim(rtrim(number_format($gb, 2, '.', ''), '0'), '.');
+    return $formatted . ' GB';
+}
+
+/**
+ * Inspects a compiled book asset directory and returns human-readable and raw byte
+ * file sizes for all 4 eBook deliverables (Illustrated EPUB/PDF + Text-Only EPUB/PDF).
+ *
+ * @param string $bookAssetDir Path to `raggiesoft-assets/raggiesoft-books/books/<slug>`.
+ * @param string $seriesSlug   Canonical series slug.
+ * @return array Associative array of formatted strings and byte counts.
+ */
+function getSeriesEbookSizes(string $bookAssetDir, string $seriesSlug): array {
+    clearstatcache();
+    $files = [
+        'epub'      => $bookAssetDir . '/' . $seriesSlug . '.epub',
+        'pdf'       => $bookAssetDir . '/' . $seriesSlug . '.pdf',
+        'text_epub' => $bookAssetDir . '/' . $seriesSlug . '-text.epub',
+        'text_pdf'  => $bookAssetDir . '/' . $seriesSlug . '-text.pdf',
+    ];
+    $sizes = [
+        'epub'            => '',
+        'pdf'             => '',
+        'text_epub'       => '',
+        'text_pdf'        => '',
+        'epub_bytes'      => 0,
+        'pdf_bytes'       => 0,
+        'text_epub_bytes' => 0,
+        'text_pdf_bytes'  => 0,
+    ];
+    foreach ($files as $key => $filePath) {
+        if (is_file($filePath)) {
+            $bytes = (int)@filesize($filePath);
+            if ($bytes > 0) {
+                $sizes[$key] = formatEbookFileSize($bytes);
+                $sizes[$key . '_bytes'] = $bytes;
+            }
+        }
+    }
+    return $sizes;
+}
+
 // Find all top-level narrative directories
 $narrativeDirs = array_filter(glob($sourceBooksDir . '/*'), 'is_dir');
 if (empty($narrativeDirs)) {
@@ -165,6 +235,8 @@ if (empty($narrativeDirs)) {
 $masterCatalog = [];
 // Full-text search index array collecting cleaned text across all scenes
 $searchIndex = [];
+// Lookup map of all series eBook file sizes for `raggiesoft.com/subdomains/books/data/ebook-sizes.json`
+$allEbookSizes = [];
 
 foreach ($narrativeDirs as $narrativeDir) {
     $narrativeName = basename($narrativeDir);
@@ -393,12 +465,18 @@ foreach ($narrativeDirs as $narrativeDir) {
         }
     }
 
+    // Measure compiled EPUB & PDF file sizes (Illustrated + Text-Only Editions)
+    $seriesAssetDir = $assetDestDir . '/' . $seriesSlug;
+    $ebookSizes = getSeriesEbookSizes($seriesAssetDir, $seriesSlug);
+    $allEbookSizes[$seriesSlug] = $ebookSizes;
+
     if ($isTargetedBuild) {
         // Transform and map routes for the Ocean View Book Library (books.raggiesoft.com)
         $newRouteData = [];
         $newRouteData['common'] = $routeData['common'];
         $newRouteData['common']['siteName'] = "Ocean View Archives";
         $newRouteData['common']['theme'] = "oceanview";
+        $newRouteData['common']['ebook_sizes'] = $ebookSizes;
 
         foreach ($routeData as $key => $val) {
             if ($key === 'common') continue;
@@ -433,11 +511,12 @@ foreach ($narrativeDirs as $narrativeDir) {
             'series_description_long' => $longDesc,
             'series_image' => $seriesMeta['series_image'] ?? '',
             'next_series_url' => $seriesMeta['next_series_url'] ?? '',
+            'ebook_sizes' => $ebookSizes,
             'eras' => $tocBooks
         ];
         $tocDestFile = $assetDestDir . '/' . $seriesSlug . '/toc.json';
         file_put_contents($tocDestFile, json_encode($generatedToc, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-        echo "  [Assets] Saved auto-discovered Table of Contents to toc.json\n";
+        echo "  [Assets] Saved auto-discovered Table of Contents (with eBook sizes) to toc.json\n";
     }
 
     // Populate the master catalog with entry details
@@ -448,7 +527,8 @@ foreach ($narrativeDirs as $narrativeDir) {
         'image' => $seriesMeta['series_image'] ?? '',
         'first_route' => $firstRouteUrl,
         'folder' => $narrativeName,
-        'hide' => isset($seriesMeta['hide']) ? $seriesMeta['hide'] : false
+        'hide' => isset($seriesMeta['hide']) ? $seriesMeta['hide'] : false,
+        'ebook_sizes' => $ebookSizes
     ];
 }
 
@@ -456,6 +536,11 @@ foreach ($narrativeDirs as $narrativeDir) {
 $catalogFile = $assetDestDir . '/catalog.json';
 file_put_contents($catalogFile, json_encode($masterCatalog, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 echo "\n  [Catalog] Master Catalog saved to: {$catalogFile}\n";
+
+// Write the local eBook file sizes manifest for books.raggiesoft.com
+$ebookSizesManifestFile = $booksAppDir . '/data/ebook-sizes.json';
+file_put_contents($ebookSizesManifestFile, json_encode($allEbookSizes, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+echo "  [Sizes] eBook file sizes manifest saved to: {$ebookSizesManifestFile}\n";
 
 // Write the full-text search index file
 file_put_contents($indexDestFile, json_encode($searchIndex, JSON_UNESCAPED_SLASHES));
