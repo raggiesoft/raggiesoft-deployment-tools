@@ -320,7 +320,17 @@ foreach ($narrativeDirs as $narrativeDir) {
         "filePath" => "__TOC__"
     ];
 
+    // Build dedicated Table of Illustrations route (reusable across all narratives)
+    $illustrationsRouteUrl = "/raggiesoft-books/books/{$seriesSlug}/illustrations";
+    $routeData[$illustrationsRouteUrl] = [
+        "view" => "pages/raggiesoft-books/books/viewer",
+        "title" => "Table of Illustrations - {$seriesTitle}",
+        "theme" => "raggiesoft-books",
+        "filePath" => "__ILLUSTRATIONS__"
+    ];
+
     $tocBooks = [];
+    $seriesIllustrationCount = 0;
 
     // Auto-discover Era directories strictly based on 'e*' naming convention
     $bDirs = glob($narrativeDir . '/e*', GLOB_ONLYDIR);
@@ -350,10 +360,12 @@ foreach ($narrativeDirs as $narrativeDir) {
         ];
 
         // Track structure for the auto-generated TOC
+        $eraIllustrationCount = 0;
         $tocEra = [
             'era_num' => $eraNum,
             'era_title' => $eraTitle,
             'era_url' => $eraRouteUrl,
+            'illustration_count' => 0,
             'chapters' => []
         ];
 
@@ -385,10 +397,12 @@ foreach ($narrativeDirs as $narrativeDir) {
             ];
 
             // Track structure for auto-generated TOC (`parts` array inside each chapter)
+            $chapIllustrationCount = 0;
             $tocChap = [
                 'chap_num' => $chapNum,
                 'chap_title' => $chapTitle,
                 'chap_url' => $chapRouteUrl,
+                'illustration_count' => 0,
                 'parts' => []
             ];
 
@@ -402,18 +416,94 @@ foreach ($narrativeDirs as $narrativeDir) {
                 $partNum = intval(str_replace(['p', '.md'], '', $pName));
 
                 $yamlTitle = "Part {$partNum}";
+                $partDate = '';
+                $partStartTime = '';
+                $partLocation = '';
+                $partImages = [];
                 $partContent = file_get_contents($pFile);
                 $bodyWithoutFrontmatter = $partContent;
 
-                // Extract title from part's YAML frontmatter using regex and strip frontmatter for search index
+                // Extract title, scene metadata, and illustrations from part's YAML frontmatter
                 if (preg_match('/^---([\s\S]*?)---/', ltrim($partContent), $matches)) {
+                    $frontmatterRaw = $matches[1];
                     $bodyWithoutFrontmatter = str_replace($matches[0], '', $partContent);
-                    if (preg_match('/^title:\s*"?([^"\r\n]+)"?/m', $matches[1], $m)) {
+                    if (preg_match('/^title:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $m)) {
                         $extractedTitle = trim($m[1]);
                         if ($extractedTitle !== '' && strcasecmp($extractedTitle, 'Untitled Chapter') !== 0 && strcasecmp($extractedTitle, 'Untitled') !== 0) {
                             $yamlTitle = $extractedTitle;
                         } elseif ($chapPartCount === 1) {
                             $yamlTitle = preg_replace('/^Chapter\s+\d+:\s*/i', '', $chapTitle);
+                        }
+                    }
+                    if (preg_match('/^date:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mDate)) {
+                        $partDate = trim($mDate[1], " \t\n\r\0\x0B\"'");
+                    }
+                    if (preg_match('/^start_time:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mTime)) {
+                        $partStartTime = trim($mTime[1], " \t\n\r\0\x0B\"'");
+                    }
+                    if (preg_match('/^location:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mLoc)) {
+                        $partLocation = trim($mLoc[1], " \t\n\r\0\x0B\"'");
+                    }
+
+                    // Parse frontmatter `image:` / `images:` and `image_alt:` / `image_alts:` (scalar or YAML list)
+                    $fmImageUrls = [];
+                    $fmImageAlts = [];
+                    $fmLines = preg_split('/\r\n|\r|\n/', $frontmatterRaw);
+                    $currentListKey = null;
+                    foreach ($fmLines as $fmLine) {
+                        if (preg_match('/^([a-zA-Z0-9_-]+):\s*(.*)$/', $fmLine, $kvMatch)) {
+                            $k = strtolower(trim($kvMatch[1]));
+                            $v = trim($kvMatch[2]);
+                            $currentListKey = null;
+                            if ($k === 'image' || $k === 'images') {
+                                if ($v === '') {
+                                    $currentListKey = 'image';
+                                } else {
+                                    $cleanVal = trim($v, "\"'");
+                                    if ($cleanVal !== '') $fmImageUrls[] = $cleanVal;
+                                }
+                            } elseif ($k === 'image_alt' || $k === 'image_alts') {
+                                if ($v === '') {
+                                    $currentListKey = 'image_alt';
+                                } else {
+                                    $cleanVal = trim($v, "\"'");
+                                    if ($cleanVal !== '') $fmImageAlts[] = $cleanVal;
+                                }
+                            }
+                        } elseif ($currentListKey !== null && preg_match('/^\s*-\s+(.*)$/', $fmLine, $listMatch)) {
+                            $itemVal = trim($listMatch[1], " \t\"'");
+                            if ($itemVal !== '') {
+                                if ($currentListKey === 'image') {
+                                    $fmImageUrls[] = $itemVal;
+                                } elseif ($currentListKey === 'image_alt') {
+                                    $fmImageAlts[] = $itemVal;
+                                }
+                            }
+                        } elseif (preg_match('/^\S/', $fmLine)) {
+                            $currentListKey = null;
+                        }
+                    }
+
+                    foreach ($fmImageUrls as $idx => $imgUrl) {
+                        $partImages[] = [
+                            'src' => $imgUrl,
+                            'alt' => $fmImageAlts[$idx] ?? ($fmImageAlts[0] ?? '')
+                        ];
+                    }
+                }
+
+                // Also discover any inline Markdown images (`![alt](url)`) inside the scene body
+                if (preg_match_all('/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/', $bodyWithoutFrontmatter, $inlineImgMatches, PREG_SET_ORDER)) {
+                    $seenSrcs = array_column($partImages, 'src');
+                    foreach ($inlineImgMatches as $inlineMatch) {
+                        $inlineAlt = trim($inlineMatch[1]);
+                        $inlineSrc = trim($inlineMatch[2]);
+                        if ($inlineSrc !== '' && !in_array($inlineSrc, $seenSrcs, true)) {
+                            $partImages[] = [
+                                'src' => $inlineSrc,
+                                'alt' => $inlineAlt
+                            ];
+                            $seenSrcs[] = $inlineSrc;
                         }
                     }
                 }
@@ -441,12 +531,28 @@ foreach ($narrativeDirs as $narrativeDir) {
                 ];
                 $lastRouteUrl = $routeUrl; // Continually update to capture the very last part
 
-                // Finalize TOC structure with parts
-                $tocChap['parts'][] = [
+                $partImgCount = count($partImages);
+                $chapIllustrationCount += $partImgCount;
+                $eraIllustrationCount += $partImgCount;
+                $seriesIllustrationCount += $partImgCount;
+
+                // Finalize TOC structure with parts and illustration manifest
+                $partEntry = [
                     'part_num' => $partNum,
                     'part_title' => $partTitle,
-                    'file_path' => $relPath
+                    'file_path' => $relPath,
+                    'url' => str_replace('/raggiesoft-books/books', '', $routeUrl)
                 ];
+                if ($partDate !== '') $partEntry['date'] = $partDate;
+                if ($partStartTime !== '') $partEntry['start_time'] = $partStartTime;
+                if ($partLocation !== '') $partEntry['location'] = $partLocation;
+                if ($partImgCount > 0) {
+                    $partEntry['image'] = $partImages[0]['src'];
+                    $partEntry['image_alt'] = $partImages[0]['alt'];
+                    $partEntry['images'] = $partImages;
+                    $partEntry['image_count'] = $partImgCount;
+                }
+                $tocChap['parts'][] = $partEntry;
 
                 // Clean the part body text and add to the full-text search index
                 $cleanBody = strip_tags($bodyWithoutFrontmatter);
@@ -463,8 +569,10 @@ foreach ($narrativeDirs as $narrativeDir) {
                     'content' => $cleanBody
                 ];
             }
+            $tocChap['illustration_count'] = $chapIllustrationCount;
             $tocEra['chapters'][] = $tocChap;
         }
+        $tocEra['illustration_count'] = $eraIllustrationCount;
         $tocBooks[] = $tocEra;
     }
 
@@ -488,6 +596,7 @@ foreach ($narrativeDirs as $narrativeDir) {
         $newRouteData['common']['siteName'] = "Ocean View Archives";
         $newRouteData['common']['theme'] = "oceanview";
         $newRouteData['common']['ebook_sizes'] = $ebookSizes;
+        $newRouteData['common']['illustration_count'] = $seriesIllustrationCount;
 
         foreach ($routeData as $key => $val) {
             if ($key === 'common') continue;
@@ -523,11 +632,12 @@ foreach ($narrativeDirs as $narrativeDir) {
             'series_image' => $seriesMeta['series_image'] ?? '',
             'next_series_url' => $seriesMeta['next_series_url'] ?? '',
             'ebook_sizes' => $ebookSizes,
+            'illustration_count' => $seriesIllustrationCount,
             'eras' => $tocBooks
         ];
         $tocDestFile = $assetDestDir . '/' . $seriesSlug . '/toc.json';
         file_put_contents($tocDestFile, json_encode($generatedToc, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-        echo "  [Assets] Saved auto-discovered Table of Contents (with eBook sizes) to toc.json\n";
+        echo "  [Assets] Saved auto-discovered Table of Contents (with {$seriesIllustrationCount} illustrations & eBook sizes) to toc.json\n";
     }
 
     // Populate the master catalog with entry details
@@ -539,7 +649,8 @@ foreach ($narrativeDirs as $narrativeDir) {
         'first_route' => $firstRouteUrl,
         'folder' => $narrativeName,
         'hide' => isset($seriesMeta['hide']) ? $seriesMeta['hide'] : false,
-        'ebook_sizes' => $ebookSizes
+        'ebook_sizes' => $ebookSizes,
+        'illustration_count' => $seriesIllustrationCount
     ];
 }
 
