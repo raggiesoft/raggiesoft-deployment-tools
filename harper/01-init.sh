@@ -45,11 +45,17 @@ echo "   🔐 Targeting Local Master Vaults: $VAULTS_ROOT"
 
 # --- ARGUMENT PARSING ---
 # Default execution flags
+# - REBUILD: Global or scoped rebuild mode triggered by `--rebuild` (or `-y`).
+# - TARGET_ARTIST: Optional artist directory slug (`--artist <artist-slug>`) to scope `--rebuild`
+#   to a single artist (or a single album when paired with `--album <album-slug>`).
+# - TARGET_ALBUM: Optional album directory slug (`--album <album-slug>`). Strictly requires `--artist`.
 REBUILD=false
 FORCE_IGPU=false
 OVERWRITE=false
 METADATA_ONLY=false
 NO_VTT=false
+TARGET_ARTIST=""
+TARGET_ALBUM=""
 ffmpeg_flag="-n"
 
 # Process provided command-line arguments
@@ -58,16 +64,54 @@ while [[ "$#" -gt 0 ]]; do
         --rebuild|-y) 
             REBUILD=true
             OVERWRITE=true
-            # Force ffmpeg to overwrite output files
+            # Force ffmpeg to overwrite output files (scoped per-album in 03-album-processor.sh if --artist/--album are set)
             ffmpeg_flag="-y" 
+            ;;
+        --artist)
+            if [[ -z "${2:-}" || "${2:-}" == --* ]]; then
+                echo "🛑 HARPER FATAL ERROR: --artist requires an artist slug argument (e.g., --artist the-stardust-engine)."
+                exit "${ERR_FATAL_INIT:-1}"
+            fi
+            TARGET_ARTIST="$2"
+            shift
+            ;;
+        --album)
+            if [[ -z "${2:-}" || "${2:-}" == --* ]]; then
+                echo "🛑 HARPER FATAL ERROR: --album requires an album slug argument (e.g., --album 2016-live-at-the-crucible)."
+                exit "${ERR_FATAL_INIT:-1}"
+            fi
+            TARGET_ALBUM="$2"
+            shift
             ;;
         --force-igpu) FORCE_IGPU=true ;;
         --metadata) METADATA_ONLY=true ;;
         --no-vtt) NO_VTT=true ;;
-        *) echo "🛑 HARPER: Unknown parameter passed: $1"; exit 1 ;;
+        *) echo "🛑 HARPER: Unknown parameter passed: $1"; exit "${ERR_FATAL_INIT:-1}" ;;
     esac
     shift
 done
+
+# --- SCOPED REBUILD VALIDATION (--artist & --album) ---
+# Rule 1: --album strictly requires --artist so Harper knows which artist vault/assets tree to target.
+if [ -n "$TARGET_ALBUM" ] && [ -z "$TARGET_ARTIST" ]; then
+    echo "🛑 HARPER FATAL ERROR: --album ('$TARGET_ALBUM') requires --artist <artist-slug> to also be specified!"
+    echo "   Usage: ./raggiesoft-deployment-tools/harper.sh --rebuild --artist <artist-slug> --album <album-slug>"
+    exit "${ERR_FATAL_INIT:-1}"
+fi
+
+# Rule 2: If --artist (or --artist + --album) is passed, auto-enable REBUILD for that target scope
+# and verify that the target artist/album directories physically exist on disk before starting.
+if [ -n "$TARGET_ARTIST" ]; then
+    REBUILD=true
+    if [ ! -d "$SEARCH_PATH/$TARGET_ARTIST" ]; then
+        echo "🛑 HARPER FATAL ERROR: Artist directory not found at '$SEARCH_PATH/$TARGET_ARTIST'!"
+        exit "${ERR_FATAL_INIT:-1}"
+    fi
+    if [ -n "$TARGET_ALBUM" ] && [ ! -d "$SEARCH_PATH/$TARGET_ARTIST/$TARGET_ALBUM" ]; then
+        echo "🛑 HARPER FATAL ERROR: Album directory not found at '$SEARCH_PATH/$TARGET_ARTIST/$TARGET_ALBUM'!"
+        exit "${ERR_FATAL_INIT:-1}"
+    fi
+fi
 
 # --- PRE-FLIGHT HARDWARE CHECK (Cross-Platform) ---
 # Detect system GPU capabilities to avoid hanging the system during heavy loads
@@ -95,16 +139,19 @@ if echo "$GPU_INFO" | grep -qiE 'integrated|vega|renoir|cezanne|intel|uhd|iris|r
     IGPU_SAFE_MODE="-g 1 -t 32"
 fi
 
-# Prevent accidental complete rebuilds on iGPUs due to performance constraints
-if [ "$REBUILD" = true ] && [ "$IGPU_DETECTED" = true ] && [ "$FORCE_IGPU" = false ] && [ "$METADATA_ONLY" = false ]; then
+# Prevent accidental complete full-library rebuilds on iGPUs due to performance constraints
+# (Scoped single-artist or single-album rebuilds via --artist / --album are permitted)
+if [ "$REBUILD" = true ] && [ -z "$TARGET_ARTIST" ] && [ "$IGPU_DETECTED" = true ] && [ "$FORCE_IGPU" = false ] && [ "$METADATA_ONLY" = false ]; then
     echo "🛑 HARPER FATAL ERROR: Integrated GPU (iGPU) Detected!"
     echo "===================================================================="
-    echo "   Running a complete --rebuild on shared integrated graphics will"
-    echo "   result in extremely long, multi-hour processing times."
+    echo "   Running a complete library --rebuild on shared integrated graphics"
+    echo "   will result in extremely long, multi-hour processing times."
     echo ""
     echo "   Harper is aborting to prevent an accidental system lockdown."
     echo ""
-    echo "   If you genuinely wish to proceed with the iGPU, you must append:"
+    echo "   To rebuild a single artist or album, pass:"
+    echo "   --rebuild --artist <artist-slug> [--album <album-slug>]"
+    echo "   Or if you genuinely wish to rebuild the entire library on iGPU, append:"
     echo "   --force-igpu"
     echo "===================================================================="
     exit 1
@@ -203,11 +250,15 @@ fi
 
 # --- OVERWRITE & METADATA STATUS LOGS ---
 # Log configuration parameters that guide downstream operations
-if [ "$OVERWRITE" = true ]; then
+if [ "$REBUILD" = true ]; then
     if [ "$METADATA_ONLY" = true ]; then
         echo "   ⚡ HARPER: Rebuild Metadata flag detected! Overwriting JSON & Markdown only."
+    elif [ -n "$TARGET_ARTIST" ] && [ -n "$TARGET_ALBUM" ]; then
+        echo "   🎯 HARPER: Scoped Album Rebuild active! Overwriting ONLY '$TARGET_ARTIST/$TARGET_ALBUM'."
+    elif [ -n "$TARGET_ARTIST" ]; then
+        echo "   🎯 HARPER: Scoped Artist Rebuild active! Overwriting all albums for '$TARGET_ARTIST'."
     else
-        echo "   ⚡ HARPER: Rebuild flag detected! Overwriting old tracks and archives."
+        echo "   ⚡ HARPER: Full Library Rebuild flag detected! Overwriting all tracks and archives."
     fi
 fi
 

@@ -392,18 +392,27 @@ fi
 # ------------------------------------------------------------------------------
 if [ "$METADATA_ONLY" = false ] || [ "$MINTED_NEW_ISRC" = true ]; then
     if [ -f "$WAV_FILE" ]; then
-        echo "         -> 🎚️ Pressing Multi-Tier Audio (Parallelized, ISRC: $ISRC_CODE)..."
-        # Run in background to drastically speed up processing
-        press_audio_formats "$WAV_FILE" "$FILE_BASE" "$TITLE" "$ALBUM_ARTIST" "$ALBUM_NAME" "$REAL_RELEASE_YEAR" "$TRACK_NUM" "$DISC_NUM" "$GENRE" "$ISRC_CODE" &
-        # Capture PID for parent shell synchronization
-        PIDS+=($!)
-        
-        # Throttle concurrent jobs to prevent CPU starvation and memory exhaustion
-        CURRENT_JOBS=`jobs -p | wc -l`
-        while [ "$CURRENT_JOBS" -ge "$MAX_JOBS" ]; do
-            wait -n
+        VAULT_CHECK_DIR="${ALBUM_VAULT_DIR:-vault}"
+        if [ "$OVERWRITE" = true ] || [ "$MINTED_NEW_ISRC" = true ] || \
+           [ ! -f "web-mp3/$FILE_BASE.mp3" ] || \
+           [ ! -f "$VAULT_CHECK_DIR/mp3/$FILE_BASE.mp3" ] || \
+           [ ! -f "$VAULT_CHECK_DIR/ogg/$FILE_BASE.ogg" ] || \
+           [ ! -f "$VAULT_CHECK_DIR/flac/$FILE_BASE.flac" ]; then
+            echo "         -> 🎚️ Pressing Multi-Tier Audio (Parallelized, ISRC: $ISRC_CODE)..."
+            # Run in background to drastically speed up processing
+            press_audio_formats "$WAV_FILE" "$FILE_BASE" "$TITLE" "$ALBUM_ARTIST" "$ALBUM_NAME" "$REAL_RELEASE_YEAR" "$TRACK_NUM" "$DISC_NUM" "$GENRE" "$ISRC_CODE" &
+            # Capture PID for parent shell synchronization
+            PIDS+=($!)
+            
+            # Throttle concurrent jobs to prevent CPU starvation and memory exhaustion
             CURRENT_JOBS=`jobs -p | wc -l`
-        done
+            while [ "$CURRENT_JOBS" -ge "$MAX_JOBS" ]; do
+                wait -n
+                CURRENT_JOBS=`jobs -p | wc -l`
+            done
+        else
+            echo "         ⏭️  Multi-tier audio already pressed! Fast-forwarding."
+        fi
     else
         echo "         ⏭️  Audio source missing. Skipping FFmpeg encoding for $TITLE."
     fi

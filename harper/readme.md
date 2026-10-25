@@ -43,7 +43,11 @@ Execute Harper from the root workspace directory containing the `/harper` module
 ./harper.sh [FLAGS]
 ```
 
-- `--rebuild` (or `-y`): Wipes the slate clean. Overwrites existing audio, archives, and master discography files from scratch.
+- `--rebuild` (or `-y`): Wipes the slate clean. Overwrites existing audio, archives, and master discography files from scratch across the entire library (or scopes the rebuild when paired with `--artist` / `--album`).
+
+- `--artist <artist-slug>`: When used with `--rebuild`, rebuilds **only** that artist's entire library (e.g., `./harper.sh --rebuild --artist the-stardust-engine`) while fast-indexing all other artists so global catalogs (`metadata.json` and `master-catalog.json`) remain complete.
+
+- `--album <album-slug>`: Requires `--artist <artist-slug>`. When used with `--rebuild --artist <artist-slug>`, rebuilds **only** that single album (e.g., `./harper.sh --rebuild --artist the-stardust-engine --album 2016-live-at-the-crucible`).
     
 - `--metadata`: Bypasses audio rendering and archiving to rapidly repack JSON updates, DSP sheets, and lyrics.
     

@@ -26,12 +26,12 @@ echo "   🔍 HARPER: Indexing vault chronologically by Narrative Year..."
 TEMP_SORTED_ALBUMS="temp_sorted_albums.txt"
 > "$TEMP_SORTED_ALBUMS"
 
-# --- NEW CLEANUP BLOCK ---
-# If running in overwrite mode, clear out old generated discographies first
-if [ "$OVERWRITE" = true ]; then
-    echo "   🧹 HARPER: Sweeping old Master Discography files..."
-    find "$SEARCH_PATH" -name "*-discography-and-lyrics.md" -type f -delete
-fi
+# --- MASTER DISCOGRAPHY CLEANUP BLOCK ---
+# Clear out old generated Master Discography markdown files at the start of the
+# chronological pass so each artist's `*-discography-and-lyrics.md` is freshly bound
+# without duplicate sections.
+echo "   🧹 HARPER: Refreshing Master Discography booklets..."
+find "$SEARCH_PATH" -name "*-discography-and-lyrics.md" -type f -delete
 
 # ------------------------------------------------------------------------------
 # 1. Chronological Sorting Phase
@@ -88,6 +88,35 @@ while read -r tracks_file; do
     ALBUM_SLUG=`basename "$album_dir"`
     ARTIST_DIR_PATH=`dirname "$album_dir"`
     ARTIST_SLUG=`basename "$ARTIST_DIR_PATH"`
+
+    # --------------------------------------------------------------------------
+    # 2b. Scoped Rebuild & Overwrite Resolution (--rebuild [--artist] [--album])
+    # --------------------------------------------------------------------------
+    # Determine whether this specific album is targeted for a forced rebuild:
+    # - Global Rebuild (`--rebuild` with no `--artist`): OVERWRITE=true for all albums.
+    # - Artist Rebuild (`--rebuild --artist <slug>`): OVERWRITE=true for all albums by that artist.
+    # - Single-Album Rebuild (`--rebuild --artist <slug> --album <slug>`): OVERWRITE=true ONLY for that album.
+    # - Non-targeted albums during a scoped rebuild retain OVERWRITE=false so their
+    #   metadata/ISRCs still populate the global catalogs (`metadata.json` & `master-catalog.json`)
+    #   in ~1–2 seconds without re-running RealESRGAN, FFmpeg, or 7-Zip.
+    if [ "$REBUILD" = true ]; then
+        if [ -z "$TARGET_ARTIST" ]; then
+            OVERWRITE=true
+            ffmpeg_flag="-y"
+        elif [ "$ARTIST_SLUG" == "$TARGET_ARTIST" ] && [ -z "$TARGET_ALBUM" ]; then
+            OVERWRITE=true
+            ffmpeg_flag="-y"
+        elif [ "$ARTIST_SLUG" == "$TARGET_ARTIST" ] && [ "$ALBUM_SLUG" == "$TARGET_ALBUM" ]; then
+            OVERWRITE=true
+            ffmpeg_flag="-y"
+        else
+            OVERWRITE=false
+            ffmpeg_flag="-n"
+        fi
+    else
+        OVERWRITE=false
+        ffmpeg_flag="-n"
+    fi
     
     WEB_URL="/engine-room/artists/$ARTIST_SLUG/albums/$ALBUM_SLUG"
     # Create a safe filesystem name stripping punctuation and spaces
