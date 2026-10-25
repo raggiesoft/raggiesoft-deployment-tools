@@ -485,10 +485,18 @@ foreach ($narrativeDirs as $narrativeDir) {
                     }
 
                     foreach ($fmImageUrls as $idx => $imgUrl) {
-                        $partImages[] = [
-                            'src' => $imgUrl,
-                            'alt' => $fmImageAlts[$idx] ?? ($fmImageAlts[0] ?? '')
-                        ];
+                        $normSrc = preg_replace('/#.*$/', '', str_replace(['{{CDN}}', '{{cms}}', 'https://assets.raggiesoft.com'], '', trim($imgUrl)));
+                        $cleanRel = ltrim($normSrc, '/');
+                        if ($cleanRel !== '' && strpos($cleanRel, 'raggiesoft-books/') !== 0 && strpos($cleanRel, 'raggiesoft-lore/') !== 0 && strpos($cleanRel, 'engine-room-records/') !== 0) {
+                            $cleanRel = 'raggiesoft-books/images/scenes/' . $cleanRel;
+                        }
+                        $normSrc = '/' . $cleanRel;
+                        if ($normSrc !== '/' && is_file($serverRoot . '/raggiesoft-assets' . $normSrc)) {
+                            $partImages[] = [
+                                'src' => $normSrc,
+                                'alt' => $fmImageAlts[$idx] ?? ($fmImageAlts[0] ?? '')
+                            ];
+                        }
                     }
                 }
 
@@ -498,12 +506,18 @@ foreach ($narrativeDirs as $narrativeDir) {
                     foreach ($inlineImgMatches as $inlineMatch) {
                         $inlineAlt = trim($inlineMatch[1]);
                         $inlineSrc = trim($inlineMatch[2]);
-                        if ($inlineSrc !== '' && !in_array($inlineSrc, $seenSrcs, true)) {
+                        $normInlineSrc = preg_replace('/#.*$/', '', str_replace(['{{CDN}}', '{{cms}}', 'https://assets.raggiesoft.com'], '', $inlineSrc));
+                        $cleanInlineRel = ltrim($normInlineSrc, '/');
+                        if ($cleanInlineRel !== '' && strpos($cleanInlineRel, 'raggiesoft-books/') !== 0 && strpos($cleanInlineRel, 'raggiesoft-lore/') !== 0 && strpos($cleanInlineRel, 'engine-room-records/') !== 0) {
+                            $cleanInlineRel = 'raggiesoft-books/images/scenes/' . $cleanInlineRel;
+                        }
+                        $normInlineSrc = '/' . $cleanInlineRel;
+                        if ($normInlineSrc !== '/' && !in_array($normInlineSrc, $seenSrcs, true) && is_file($serverRoot . '/raggiesoft-assets' . $normInlineSrc)) {
                             $partImages[] = [
-                                'src' => $inlineSrc,
+                                'src' => $normInlineSrc,
                                 'alt' => $inlineAlt
                             ];
-                            $seenSrcs[] = $inlineSrc;
+                            $seenSrcs[] = $normInlineSrc;
                         }
                     }
                 }
