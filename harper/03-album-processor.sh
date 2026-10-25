@@ -27,11 +27,12 @@ TEMP_SORTED_ALBUMS="temp_sorted_albums.txt"
 > "$TEMP_SORTED_ALBUMS"
 
 # --- MASTER DISCOGRAPHY CLEANUP BLOCK ---
-# Clear out old generated Master Discography markdown files at the start of the
-# chronological pass so each artist's `*-discography-and-lyrics.md` is freshly bound
+# Clear out old generated Master Discography and DSP Upload Guide markdown files
+# at the start of the chronological pass so each artist's booklets are freshly bound
 # without duplicate sections.
-echo "   🧹 HARPER: Refreshing Master Discography booklets..."
+echo "   🧹 HARPER: Refreshing Master Discography & DSP Upload Guides..."
 find "$SEARCH_PATH" -name "*-discography-and-lyrics.md" -type f -delete
+find "$SEARCH_PATH" -name "*-dsp-upload-guide.md" -type f -delete
 
 # ------------------------------------------------------------------------------
 # 1. Chronological Sorting Phase
@@ -337,6 +338,261 @@ while read -r tracks_file; do
             echo "      ⏭️  Master lyric booklet already bound! Fast-forwarding."
         fi
     fi
+
+    # --------------------------------------------------------------------------
+    # 8b. Album-Level DSP Upload Reference Sheet Generation (DistroKid / DistributeMusic.ai)
+    # --------------------------------------------------------------------------
+    # Generates `dsp-upload-sheet.md` directly inside the album folder (and mirrors
+    # it to `streaming-services/dsp-upload-sheet.md`), plus appends to the artist-level
+    # `$ARTIST_SLUG-dsp-upload-guide.md` rollup so the producer has a clean Artist -> Album
+    # -> Track reference sheet with separated `Name` and `Version` fields ready at the
+    # distributor upload screen.
+    export DSP_SHEET_FILE="dsp-upload-sheet.md"
+    export ARTIST_DSP_GUIDE="$ROOT_DIR/$SEARCH_PATH/$ARTIST_SLUG/$ARTIST_SLUG-dsp-upload-guide.md"
+
+    echo "      📋 HARPER: Generating DSP Upload Reference Sheet ($DSP_SHEET_FILE)..."
+    node -e '
+      const fs = require("fs");
+      const path = require("path");
+
+      const albumJson = JSON.parse(fs.readFileSync("album.json", "utf8"));
+      const rawTracks = JSON.parse(fs.readFileSync("tracks.json", "utf8"));
+      const tracks = Array.isArray(rawTracks) ? rawTracks : (rawTracks.tracks || []);
+
+      const artistName = (albumJson.byArtist && albumJson.byArtist.name) || process.env.ALBUM_ARTIST || "Unknown Artist";
+      const albumName = albumJson.name || process.env.ALBUM_NAME || "Unknown Album";
+      const albumTypeRaw = albumJson.albumProductionType || "StudioAlbum";
+      const isLiveAlbum = albumTypeRaw.toLowerCase().includes("live");
+      const isCompilation = albumTypeRaw.toLowerCase().includes("compilation");
+      const isSoundtrack = albumTypeRaw.toLowerCase().includes("soundtrack");
+      const releaseTypeLabel = isLiveAlbum
+        ? "Live Album"
+        : isCompilation
+          ? "Compilation / Anthology"
+          : isSoundtrack
+            ? "Soundtrack Album"
+            : "Studio Album";
+
+      const genre = Array.isArray(albumJson.genre) ? albumJson.genre.join(", ") : (albumJson.genre || "");
+      const narrativeDate = albumJson.temporalCoverage || "";
+      const realReleaseDate = albumJson.datePublished || process.env.REAL_RELEASE_DATE || "";
+      const upc = albumJson.gtin12 || albumJson.identifier || "";
+      const dspExempt = Boolean(albumJson.dspExempt);
+      const dspNotice = albumJson.dspNotice || "";
+      const albumVaultDir = process.env.ALBUM_VAULT_DIR || "vault";
+      const masterWavDir = process.env.MASTER_WAV_DIR || "../../master-wav";
+
+      function parseDspTitleAndVersion(rawTitle, explicitVersion) {
+        let title = (rawTitle || "").trim();
+        const versions = [];
+        const featured = [];
+
+        if (explicitVersion && String(explicitVersion).trim()) {
+          versions.push(String(explicitVersion).trim());
+        }
+
+        // 1. Extract bracketed descriptors: [Full Suite], [Radio Edit], [Japanese Version], [English Version]
+        title = title.replace(/\s*\[([^\]]+)\]/g, (_, inner) => {
+          const val = inner.trim();
+          if (val && !versions.includes(val)) versions.push(val);
+          return "";
+        });
+
+        // 2. Extract parenthetical version/demo/mix/live/edit/featured descriptors
+        title = title.replace(/\s*\(([^)]+)\)/g, (fullMatch, inner) => {
+          const cleanInner = inner.trim();
+          const lower = cleanInner.toLowerCase();
+
+          // Handle featured artist or combined mix + featured artist
+          if (lower.includes("feat.") || lower.includes("ft.")) {
+            const parts = cleanInner.split(/\s*(?:—|--|-|,)?\s*(?:feat\.|ft\.)\s*/i);
+            if (parts[0] && parts[0].trim() && !versions.includes(parts[0].trim())) {
+              versions.push(parts[0].trim());
+            }
+            if (parts[1] && parts[1].trim()) {
+              featured.push(parts[1].trim());
+            }
+            return "";
+          }
+
+          if (
+            lower.startsWith("live") ||
+            lower.includes("demo") ||
+            lower.includes("mix") ||
+            lower.includes("sketch") ||
+            lower.includes("alternate") ||
+            lower.includes("radio edit") ||
+            lower === "edit" ||
+            lower.endsWith(" edit") ||
+            lower.includes("full suite") ||
+            lower.includes("b-side") ||
+            lower.includes("extended") ||
+            lower.includes("remaster") ||
+            lower.includes("version") ||
+            lower === "instrumental" ||
+            /^\d{4}\s+studio$/i.test(cleanInner)
+          ) {
+            if (!versions.includes(cleanInner)) versions.push(cleanInner);
+            return "";
+          }
+
+          return fullMatch;
+        });
+
+        title = title.trim();
+
+        // 3. On Live Albums, DistroKid & DistributeMusic.ai require the live concert identifier
+        // in the Version field rather than the main song title.
+        if (isLiveAlbum && !versions.some((v) => v.toLowerCase().includes("live"))) {
+          versions.unshift(albumName);
+        }
+
+        const versionStr = versions.length > 0 ? versions.join(" - ") : "";
+        const taggedTitle = versionStr ? `${title} (${versionStr})` : title;
+
+        return {
+          name: title,
+          version: versionStr || "None (Leave Blank on DSP)",
+          taggedTitle,
+          featured: featured.length > 0 ? featured.join(", ") : ""
+        };
+      }
+
+      const discNumbers = new Set(tracks.map((t) => t.disc || 1));
+      const isMultiDisc = discNumbers.size > 1;
+
+      let readyCount = 0;
+      const trackEntries = tracks.map((t, idx) => {
+        const parsed = parseDspTitleAndVersion(t.title || "", t.version || "");
+        const fileBase = t.fileName || `${t.disc || 1}-${String(t.track || idx + 1).padStart(2, "0")}`;
+        const masterRel = t.masterWavPath || "";
+        const sourceWavPath = masterRel ? path.join(masterWavDir, `${masterRel}.wav`) : "";
+        const vaultWavPath = path.join(albumVaultDir, "wav", `${fileBase}.wav`);
+        const hasAudioMaster = Boolean(
+          (sourceWavPath && fs.existsSync(sourceWavPath)) ||
+          (vaultWavPath && fs.existsSync(vaultWavPath))
+        );
+        if (hasAudioMaster) readyCount += 1;
+
+        const cleanLyricsPath = `streaming-services/lyrics/${fileBase}.txt`;
+        let isInstrumental = false;
+        if (fs.existsSync(cleanLyricsPath)) {
+          const txt = fs.readFileSync(cleanLyricsPath, "utf8").trim();
+          isInstrumental = txt.length === 0;
+        } else if (fs.existsSync(`lyrics/${fileBase}.md`)) {
+          const md = fs.readFileSync(`lyrics/${fileBase}.md`, "utf8");
+          isInstrumental = !md.includes("**LYRICS:**");
+        } else {
+          isInstrumental = true;
+        }
+
+        return {
+          overallNum: idx + 1,
+          disc: t.disc || 1,
+          trackNum: t.track || idx + 1,
+          rawTitle: parsed.taggedTitle,
+          name: parsed.name,
+          version: parsed.version,
+          taggedTitle: parsed.taggedTitle,
+          featured: parsed.featured,
+          isrc: (t.isrc || "").trim() || "Pending (Auto-mints QTAHP code when WAV is in master-wav)",
+          duration: (t.duration || "").trim() || "In Studio",
+          hasAudioMaster,
+          vaultWavPath,
+          cleanLyricsPath: fs.existsSync(cleanLyricsPath) ? cleanLyricsPath : `lyrics/${fileBase}.md`,
+          isInstrumental
+        };
+      });
+
+      const lines = [];
+      lines.push(`# ${artistName}`);
+      lines.push(`## ${albumName}`);
+      lines.push("");
+      lines.push("> **DSP Upload Quick-Reference Sheet (DistroKid & DistributeMusic.ai)**");
+      lines.push("> Designed for side-by-side use on the distributor upload screen. All version, live venue, demo, mix, and edit suffixes have been stripped from `Name` and placed into `Version` to satisfy strict DSP title validation.");
+      lines.push("");
+      lines.push("### Album-Level Upload Settings");
+      lines.push(`* **Artist / Band Name:** \`${artistName}\``);
+      lines.push(`* **Album Title:** \`${albumName}\``);
+      lines.push(`* **Release Type:** \`${releaseTypeLabel}\` (\`${albumTypeRaw}\`)`);
+      lines.push(`* **Total Tracks:** \`${tracks.length}\` (\`${readyCount}\` WAV Masters Ready / \`${tracks.length - readyCount}\` In Studio)`);
+      lines.push(`* **Record Label:** \`Engine Room Records\``);
+      lines.push(`* **Primary Genre:** \`${genre}\``);
+      lines.push(`* **In-Universe Release Date:** \`${narrativeDate || "N/A"}\``);
+      lines.push(`* **Real-World DSP Release Date:** \`${realReleaseDate || "TBD"}\``);
+      lines.push(`* **Album UPC / GTIN-12:** \`${upc || "None (Use Distributor-Assigned UPC)"}\``);
+      if (dspExempt) {
+        lines.push(`* **DSP Exemption Status:** \`EXEMPT FROM COMMERCIAL DSPs\` ${dspNotice ? `— *${dspNotice}*` : ""}`);
+      }
+      lines.push(`* **3000×3000 Cover Art File:** \`streaming-services/album-art/album-art.jpg\``);
+      lines.push(`* **Songwriter / Lyricist (Real Human Name):** \`Michael P. Ragsdale\``);
+      lines.push(`* **P-Line & C-Line (\`℗\` & \`©\`):** \`${(realReleaseDate || "2026").slice(0, 4)} Engine Room Records / Michael P. Ragsdale\``);
+      lines.push(`* **AI Disclosure:** \`Yes — Music & Audio (Human-Authored Lyrics & Narrative Lore)\``);
+      lines.push(`* **Content ID / Social Media Pack:** \`DO NOT SELECT / LEAVE UNCHECKED\` *(Zero Content-ID Ambush Guarantee)*`);
+      lines.push("");
+      lines.push("---");
+      lines.push("");
+      lines.push(`### Songs (${tracks.length} Tracks)`);
+      lines.push("");
+
+      for (const item of trackEntries) {
+        const headingPrefix = isMultiDisc
+          ? `${item.overallNum}. [Disc ${item.disc} • Track ${item.trackNum}] ${item.name}`
+          : `${item.trackNum}. ${item.name}`;
+        lines.push(headingPrefix);
+        lines.push(`* **Name:** ${item.name}`);
+        lines.push(`* **Version:** ${item.version}`);
+        lines.push(`* **ID3 / Vorbis Tagged Title:** \`${item.taggedTitle}\``);
+        if (item.featured) {
+          lines.push(`* **Featured Artist:** ${item.featured}`);
+        }
+        lines.push(`* **ISRC:** ${item.isrc}`);
+        lines.push(`* **Duration:** ${item.duration} • **Instrumental:** ${item.isInstrumental ? "Yes" : "No"} • **Explicit:** No`);
+        lines.push(`* **Songwriter (Lyricist):** Michael P. Ragsdale`);
+        lines.push(`* **WAV File:** \`${item.vaultWavPath}\` ${item.hasAudioMaster ? "(✅ Ready)" : "(⏳ In Studio)"}`);
+        if (!item.isInstrumental) {
+          lines.push(`* **Clean DSP Lyrics:** \`${item.cleanLyricsPath}\``);
+        }
+        lines.push("");
+      }
+
+      const fullContent = lines.join("\n");
+      fs.writeFileSync("dsp-upload-sheet.md", fullContent, "utf8");
+      if (fs.existsSync("streaming-services")) {
+        fs.writeFileSync("streaming-services/dsp-upload-sheet.md", fullContent, "utf8");
+      }
+
+      // Append concise Artist -> Album -> Track section to the artist-level rollup guide
+      const artistGuidePath = process.env.ARTIST_DSP_GUIDE;
+      if (artistGuidePath) {
+        const guideLines = [];
+        if (!fs.existsSync(artistGuidePath) || fs.readFileSync(artistGuidePath, "utf8").trim().length === 0) {
+          guideLines.push(`# ${artistName}`);
+          guideLines.push("");
+          guideLines.push("> **Master DSP Upload Reference Guide (DistroKid & DistributeMusic.ai)**");
+          guideLines.push("> Chronological `Artist -> Album -> Track` upload reference sheet generated by Harper.");
+          guideLines.push("");
+        }
+        guideLines.push(`## ${albumName} (${(narrativeDate || "").slice(0, 4) || "TBD"}) — ${releaseTypeLabel}`);
+        guideLines.push(`* **Album Folder:** \`${path.basename(process.cwd())}\` • **UPC:** \`${upc || "None"}\` • **Genre:** \`${genre}\``);
+        guideLines.push("");
+        for (const item of trackEntries) {
+          const numLabel = isMultiDisc ? `${item.overallNum} (D${item.disc}-T${item.trackNum})` : `${item.trackNum}`;
+          guideLines.push(`${numLabel}. ${item.name}`);
+          guideLines.push(`* Name: ${item.name}`);
+          guideLines.push(`* Version: ${item.version}`);
+          guideLines.push(`* ID3 / Vorbis Tag: ${item.taggedTitle}`);
+          if (item.featured) {
+            guideLines.push(`* Featured Artist: ${item.featured}`);
+          }
+          guideLines.push(`* ISRC: ${item.isrc}`);
+          guideLines.push("");
+        }
+        guideLines.push("---");
+        guideLines.push("");
+        fs.appendFileSync(artistGuidePath, guideLines.join("\n"), "utf8");
+      }
+    '
 
     # Pass execution down to the archive generator module
     source "$MODULE_DIR/05-archiver.sh"

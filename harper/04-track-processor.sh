@@ -23,10 +23,22 @@
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
-# 1. Metadata Extraction
+# 1. Metadata Extraction & Version-Aware Tag Title Construction
 # ------------------------------------------------------------------------------
+# `TITLE` holds the clean base song name from `.title` in `tracks.json` (used for
+# the DSP `Name` field). `VERSION_INFO` holds the optional `.version` string
+# (e.g. "Live in Norfolk", "Corporate Demo", "Full Suite"). When `VERSION_INFO`
+# is present, `TAG_TITLE` renders as `"$TITLE ($VERSION_INFO)"` for ID3 tags,
+# Vorbis Comments, BWF WAV headers, and human-readable tracklists.
 FILE_BASE=`echo "$track_json" | jq -r '.fileName'`
 TITLE=`echo "$track_json" | jq -r '.title'`
+VERSION_INFO=`echo "$track_json" | jq -r '.version // empty'`
+if [ -n "$VERSION_INFO" ] && [ "$VERSION_INFO" != "null" ]; then
+    TAG_TITLE="$TITLE ($VERSION_INFO)"
+else
+    VERSION_INFO=""
+    TAG_TITLE="$TITLE"
+fi
 DISC_NUM=`echo "$track_json" | jq -r '.disc // 1'`
 TRACK_NUM=`echo "$track_json" | jq -r '.track'`
 SUITE_NAME=`echo "$track_json" | jq -r '.suiteName // empty'`
@@ -38,15 +50,15 @@ if [ -n "$SUITE_NAME" ]; then
         echo "" >> "$README_FILE"
         echo "  --- $SUITE_NAME ---" >> "$README_FILE"
     fi
-    echo "  $TRACK_NUM.$TITLE" >> "$README_FILE"
+    echo "  $TRACK_NUM.$TAG_TITLE" >> "$README_FILE"
 else
-    echo "  $TRACK_NUM.$TITLE" >> "$README_FILE"
+    echo "  $TRACK_NUM.$TAG_TITLE" >> "$README_FILE"
 fi
 
-echo "      🎙️  HARPER: Checking Track $TRACK_NUM - '$TITLE'..."
+echo "      🎙️  HARPER: Checking Track $TRACK_NUM - '$TAG_TITLE'..."
 
 # Append to the Master Discography markdown
-echo "## $TITLE" >> "$MASTER_DISCO_FILE"
+echo "## $TAG_TITLE" >> "$MASTER_DISCO_FILE"
 
 LYRIC_MD_PATH="lyrics/$FILE_BASE.md"
 
@@ -104,7 +116,7 @@ if [ -z "$ISRC_CODE" ] || [ "$ISRC_CODE" == "null" ]; then
         MINTED_NEW_ISRC=true
         ALBUM_MINTED_NEW_ISRC=true
         printf "%s|%s\t%s\n" "$ARTIST_SLUG" "$MASTER_WAV_PATH" "$ISRC_CODE" >> "$TEMP_WAV_ISRC_MAP"
-        echo "      🏷️  HARPER: Minted Official US ISRC Agency Code: $ISRC_CODE ($TITLE)"
+        echo "      🏷️  HARPER: Minted Official US ISRC Agency Code: $ISRC_CODE ($TAG_TITLE)"
         jq --arg isrc "$ISRC_CODE" --arg file "$FILE_BASE" \
           'if type == "array" then map(if .fileName == $file then .isrc = $isrc else . end) else .tracks |= map(if .fileName == $file then .isrc = $isrc else . end) end' \
           tracks.json > tracks.json.tmp && mv tracks.json.tmp tracks.json
@@ -145,6 +157,8 @@ jq -n -c \
     --arg isrc "$ISRC_CODE" \
     --arg upc "$ALBUM_UPC" \
     --arg title "$TITLE" \
+    --arg version "$VERSION_INFO" \
+    --arg tag_title "$TAG_TITLE" \
     --arg artist "$ALBUM_ARTIST" \
     --arg slug "$ARTIST_SLUG" \
     --arg album "$ALBUM_NAME" \
@@ -162,6 +176,8 @@ jq -n -c \
         isrc: $isrc, 
         albumUPC: $upc,
         trackTitle: $title, 
+        trackVersion: $version,
+        taggedTitle: $tag_title,
         albumTitle: $album, 
         albumProductionType: $album_type,
         artistPersona: $artist,
@@ -193,13 +209,14 @@ else
 
         if [ "$METADATA_ONLY" = false ] || [ "$MINTED_NEW_ISRC" = true ]; then
         if [ ! -f "$LOCAL_WAV" ] || [ "$OVERWRITE" = true ] || [ "$MINTED_NEW_ISRC" = true ]; then
-            echo "         -> 💾 Stamping BWF Metadata (ISRC: $ISRC_CODE) and pulling $MASTER_WAV_PATH to $LOCAL_WAV..."
+            echo "         -> 💾 Stamping BWF Metadata (ISRC: $ISRC_CODE, Title: '$TAG_TITLE') and pulling $MASTER_WAV_PATH to $LOCAL_WAV..."
             mkdir -p "${ALBUM_VAULT_DIR:-vault}/wav"
             
             # Replaces the standard cp command with a lossless FFmpeg metadata pass
             # Stuffs metadata directly into the RIFF INFO and BEXT chunks of the WAV
+            # Uses $TAG_TITLE ("$songName ($versionInformation)") when version is present
             ffmpeg -nostdin -hide_banner -loglevel error -y -i "$SOURCE_WAV" -write_bext 1 \
-            -metadata title="$TITLE" \
+            -metadata title="$TAG_TITLE" \
             -metadata artist="$ALBUM_ARTIST" \
             -metadata album="$ALBUM_NAME" \
             -metadata date="$REAL_RELEASE_YEAR" \
@@ -229,7 +246,7 @@ if [ -f "lyrics/$FILE_BASE.md" ]; then LYRICS_CONTENT=`cat "lyrics/$FILE_BASE.md
 # Append data to the global search index payload
 jq -n -c \
     --arg id "$FILE_BASE" \
-    --arg title "$TITLE" \
+    --arg title "$TAG_TITLE" \
     --arg artist "$ALBUM_ARTIST" \
     --arg album "$ALBUM_NAME" \
     --arg url "$WEB_URL" \
@@ -238,7 +255,7 @@ jq -n -c \
     '{id: $id, title:$title, artist: $artist, album:$album, url: $url, type:$type, content: $content}' >> "$ROOT_DIR/$TEMP_SEARCH_INDEX"
 
 # ------------------------------------------------------------------------------
-# 4. DistroKid Release Sheet Generation
+# 4. DistroKid & DistributeMusic.ai Release Sheet Generation
 # ------------------------------------------------------------------------------
 METADATA_MD="streaming-services/song-metadata/$FILE_BASE.md"
 
@@ -249,12 +266,14 @@ else
 fi
 
 if [ ! -f "$METADATA_MD" ] || [ "$OVERWRITE" = true ] || [ "$MINTED_NEW_ISRC" = true ]; then
-    echo "         -> 📋 Drafting DistroKid-Optimized Metadata sheet..."
+    echo "         -> 📋 Drafting DistroKid & DistributeMusic.ai Metadata sheet..."
     cat << EOF > "$METADATA_MD"
-# $TITLE - DistroKid Quick-Copy Sheet
+# $TAG_TITLE - DistroKid & DistributeMusic.ai Quick-Copy Sheet
 
-## 1. DistroKid Upload Form Data
-* **Track Title:** $TITLE
+## 1. Distributor Upload Form Data
+* **Track Title (Name):** $TITLE
+* **Version:** ${VERSION_INFO:-None (Leave Blank on DSP)}
+* **ID3 / Vorbis Tagged Title:** $TAG_TITLE
 * **Primary Artist:** $ALBUM_ARTIST
 * **Genre:** $GENRE
 * **Real-World DSP Release Date:** $REAL_RELEASE_DATE
@@ -398,9 +417,10 @@ if [ "$METADATA_ONLY" = false ] || [ "$MINTED_NEW_ISRC" = true ]; then
            [ ! -f "$VAULT_CHECK_DIR/mp3/$FILE_BASE.mp3" ] || \
            [ ! -f "$VAULT_CHECK_DIR/ogg/$FILE_BASE.ogg" ] || \
            [ ! -f "$VAULT_CHECK_DIR/flac/$FILE_BASE.flac" ]; then
-            echo "         -> 🎚️ Pressing Multi-Tier Audio (Parallelized, ISRC: $ISRC_CODE)..."
+            echo "         -> 🎚️ Pressing Multi-Tier Audio (Parallelized, ISRC: $ISRC_CODE, Tagged Title: '$TAG_TITLE')..."
             # Run in background to drastically speed up processing
-            press_audio_formats "$WAV_FILE" "$FILE_BASE" "$TITLE" "$ALBUM_ARTIST" "$ALBUM_NAME" "$REAL_RELEASE_YEAR" "$TRACK_NUM" "$DISC_NUM" "$GENRE" "$ISRC_CODE" &
+            # Pass $TAG_TITLE ("$songName ($versionInformation)") so ID3 tags and Vorbis Comments include version info
+            press_audio_formats "$WAV_FILE" "$FILE_BASE" "$TAG_TITLE" "$ALBUM_ARTIST" "$ALBUM_NAME" "$REAL_RELEASE_YEAR" "$TRACK_NUM" "$DISC_NUM" "$GENRE" "$ISRC_CODE" &
             # Capture PID for parent shell synchronization
             PIDS+=($!)
             

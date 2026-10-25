@@ -14,7 +14,7 @@ Harper (v21.8.0) is the high-energy, modular Bash workhorse that automates the e
     
 - **Dynamic Threading & iGPU Safety:** Automatically calculates logical CPU cores to maximize concurrent audio rendering without locking up shared integrated graphics.
     
-- **DDEX-Compliant Metadata & AI Transparency:** Deep-parses Schema.org JSON to generate DistroKid-ready DSP sheets. Injects granular AI disclaimers—explicitly dividing human-authored lyrics/lore from synthetic audio—directly into archive `README.txt` files and audio containers (utilizing BWF chunks for WAV masters and native ID3/Vorbis tags for FLAC, MP3, and OGG formats).
+- **DDEX-Compliant Metadata & AI Transparency:** Deep-parses Schema.org JSON and `tracks.json` (`title` + optional `version` key) to generate DistroKid and DistributeMusic.ai ready DSP sheets—including per-album `dsp-upload-sheet.md` (with pre-separated `Name` and `Version` fields for strict distributor title validation) and per-artist `*-dsp-upload-guide.md` rollups. When `.version` is defined on a track in `tracks.json` (e.g., `"title": "Electric Color", "version": "Live in Norfolk"`), Harper automatically constructs the composite tag title `$songName ($versionInformation)` (`"Electric Color (Live in Norfolk)"`) and stamps it into BWF WAV headers, ID3v2/v1 tags (MP3 128k & V0), and Vorbis Comments (OGG Q9 & FLAC). Injects granular AI disclaimers—explicitly dividing human-authored lyrics/lore from synthetic audio—directly into archive `README.txt` files and audio containers.
     
 - **Vault Archiving:** Decouples heavy standard and audiophile tiers into ultra-compressed 7-Zip archives (`.zip` and `.7z`).
     
