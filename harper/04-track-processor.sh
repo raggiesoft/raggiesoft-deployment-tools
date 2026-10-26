@@ -255,7 +255,7 @@ jq -n -c \
     '{id: $id, title:$title, artist: $artist, album:$album, url: $url, type:$type, content: $content}' >> "$ROOT_DIR/$TEMP_SEARCH_INDEX"
 
 # ------------------------------------------------------------------------------
-# 4. DistroKid & DistributeMusic.ai Release Sheet Generation
+# 4. DistroKid Release Sheet Generation
 # ------------------------------------------------------------------------------
 METADATA_MD="streaming-services/song-metadata/$FILE_BASE.md"
 
@@ -266,9 +266,9 @@ else
 fi
 
 if [ ! -f "$METADATA_MD" ] || [ "$OVERWRITE" = true ] || [ "$MINTED_NEW_ISRC" = true ]; then
-    echo "         -> 📋 Drafting DistroKid & DistributeMusic.ai Metadata sheet..."
+    echo "         -> 📋 Drafting DistroKid Metadata sheet..."
     cat << EOF > "$METADATA_MD"
-# $TAG_TITLE - DistroKid & DistributeMusic.ai Quick-Copy Sheet
+# $TAG_TITLE - DistroKid Quick-Copy Sheet
 
 ## 1. Distributor Upload Form Data
 * **Track Title (Name):** $TITLE
