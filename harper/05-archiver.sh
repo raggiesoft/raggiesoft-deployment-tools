@@ -50,6 +50,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
         
         if [ "$HAS_LYRICS" = true ]; then
             cp lyrics/*.md "$VAULT_TARGET/archives/staging_mp3/lyrics/" 2>/dev/null
+            cp lyrics/*.vtt "$VAULT_TARGET/archives/staging_mp3/lyrics/" 2>/dev/null
             [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" "$VAULT_TARGET/archives/staging_mp3/"
         fi
         
@@ -79,6 +80,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
         
         if [ "$HAS_LYRICS" = true ]; then
             cp lyrics/*.md "$VAULT_TARGET/archives/staging_ogg/lyrics/" 2>/dev/null
+            cp lyrics/*.vtt "$VAULT_TARGET/archives/staging_ogg/lyrics/" 2>/dev/null
             [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" "$VAULT_TARGET/archives/staging_ogg/"
         fi
         
@@ -108,6 +110,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
         
         if [ "$HAS_LYRICS" = true ]; then
             cp lyrics/*.md "$VAULT_TARGET/archives/staging_wav/lyrics/" 2>/dev/null
+            cp lyrics/*.vtt "$VAULT_TARGET/archives/staging_wav/lyrics/" 2>/dev/null
             [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" "$VAULT_TARGET/archives/staging_wav/"
         fi
         
@@ -137,6 +140,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
         
         if [ "$HAS_LYRICS" = true ]; then
             cp lyrics/*.md "$VAULT_TARGET/archives/staging_flac/lyrics/" 2>/dev/null
+            cp lyrics/*.vtt "$VAULT_TARGET/archives/staging_flac/lyrics/" 2>/dev/null
             [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" "$VAULT_TARGET/archives/staging_flac/"
         fi
         
@@ -170,6 +174,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
         
         if [ "$HAS_LYRICS" = true ]; then
             cp lyrics/*.md "$VAULT_TARGET/archives/staging_standard/lyrics/" 2>/dev/null
+            cp lyrics/*.vtt "$VAULT_TARGET/archives/staging_standard/lyrics/" 2>/dev/null
             [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" "$VAULT_TARGET/archives/staging_standard/"
         fi
         
@@ -199,6 +204,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
         
         if [ "$HAS_LYRICS" = true ]; then
             cp lyrics/*.md web-mp3/staging_free/lyrics/ 2>/dev/null
+            cp lyrics/*.vtt web-mp3/staging_free/lyrics/ 2>/dev/null
             [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" web-mp3/staging_free/
         fi
         
