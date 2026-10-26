@@ -90,8 +90,11 @@ LOCAL_WAV="${ALBUM_VAULT_DIR:-vault}/wav/$FILE_BASE.wav"
 # 1. First check if the identical recording (`$ARTIST_SLUG|$MASTER_WAV_PATH`)
 #    already has an ISRC assigned on another album/compilation; if so, inherit it
 #    to obey the US ISRC Agency Single-ISRC-Per-Recording rule.
-# 2. Otherwise, mint the next sequential `QTAHP<YY><NNNNN>` code, persist it
-#    directly into `tracks.json`, and register it in `$TEMP_WAV_ISRC_MAP`.
+# 2. Otherwise, if the album is not locked to an external distributor UPC hold
+#    (`[ -z "$ALBUM_UPC" ]`), check `$TEMP_ISRC_GAPS_FILE` first and pop the
+#    lowest unassigned sequential gap code (`1..max_seq`) before incrementing
+#    past `$TEMP_ISRC_COUNTER_FILE` (`max_seq + 1`). Persist the minted code
+#    directly into `tracks.json` and register it in `$TEMP_WAV_ISRC_MAP`.
 MINTED_NEW_ISRC=false
 if [ -z "$ISRC_CODE" ] || [ "$ISRC_CODE" == "null" ]; then
     ISRC_CODE=""
@@ -109,14 +112,23 @@ if [ -z "$ISRC_CODE" ] || [ "$ISRC_CODE" == "null" ]; then
     fi
 
     if [ -z "$ISRC_CODE" ] && [ -z "$ALBUM_UPC" ] && [ -n "$MASTER_WAV_PATH" ] && [ -f "$SOURCE_WAV" ]; then
-        CURR_SEQ=$(cat "$TEMP_ISRC_COUNTER_FILE" 2>/dev/null || echo "0")
-        NEXT_SEQ=$((CURR_SEQ + 1))
-        echo "$NEXT_SEQ" > "$TEMP_ISRC_COUNTER_FILE"
+        if [ -s "$TEMP_ISRC_GAPS_FILE" ]; then
+            # Pop the lowest unassigned sequential gap integer first to maintain a 100% contiguous QTAHP ledger
+            NEXT_SEQ=$(head -n 1 "$TEMP_ISRC_GAPS_FILE" | tr -d '[:space:]')
+            tail -n +2 "$TEMP_ISRC_GAPS_FILE" > "${TEMP_ISRC_GAPS_FILE}.tmp" && mv "${TEMP_ISRC_GAPS_FILE}.tmp" "$TEMP_ISRC_GAPS_FILE"
+            ISRC_MINT_MODE="Backfilled Gap"
+        else
+            # No unassigned gaps remain; increment past the highest allocated sequential designation
+            CURR_SEQ=$(cat "$TEMP_ISRC_COUNTER_FILE" 2>/dev/null || echo "0")
+            NEXT_SEQ=$((CURR_SEQ + 1))
+            echo "$NEXT_SEQ" > "$TEMP_ISRC_COUNTER_FILE"
+            ISRC_MINT_MODE="Minted Sequential"
+        fi
         ISRC_CODE=$(printf "%s%s%05d" "${ISRC_REGISTRANT_PREFIX:-QTAHP}" "${ISRC_YEAR_SUFFIX:-26}" "$NEXT_SEQ")
         MINTED_NEW_ISRC=true
         ALBUM_MINTED_NEW_ISRC=true
         printf "%s|%s\t%s\n" "$ARTIST_SLUG" "$MASTER_WAV_PATH" "$ISRC_CODE" >> "$TEMP_WAV_ISRC_MAP"
-        echo "      🏷️  HARPER: Minted Official US ISRC Agency Code: $ISRC_CODE ($TAG_TITLE)"
+        echo "      🏷️  HARPER: ${ISRC_MINT_MODE} Official US ISRC Agency Code: $ISRC_CODE ($TAG_TITLE)"
         jq --arg isrc "$ISRC_CODE" --arg file "$FILE_BASE" \
           'if type == "array" then map(if .fileName == $file then .isrc = $isrc else . end) else .tracks |= map(if .fileName == $file then .isrc = $isrc else . end) end' \
           tracks.json > tracks.json.tmp && mv tracks.json.tmp tracks.json

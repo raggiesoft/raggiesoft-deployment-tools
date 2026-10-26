@@ -271,19 +271,26 @@ fi
 # --- OFFICIAL US ISRC AGENCY REGISTRANT INITIALIZATION (PREFIX: QTAHP) ---
 # Registrant Name: Michael Ragsdale | Registrant ID: 185611
 # Contact: dsp.operations@engineroom-records.com | Prefix Allocated: 2026-10-20
+# Ledger Discipline: Scans all tracks.json files to determine both the highest
+# allocated sequential designation ($TEMP_ISRC_COUNTER_FILE) and any unassigned
+# sequential gaps between 00001 and max_seq ($TEMP_ISRC_GAPS_FILE) so that
+# 04-track-processor.sh automatically backfills gaps before incrementing max_seq.
 export ISRC_REGISTRANT_PREFIX="QTAHP"
 export ISRC_YEAR_SUFFIX=$(date +"%y")
 export TEMP_ISRC_COUNTER_FILE="$ROOT_DIR/temp_isrc_counter.txt"
+export TEMP_ISRC_GAPS_FILE="$ROOT_DIR/temp_isrc_gaps.txt"
 export TEMP_WAV_ISRC_MAP="$ROOT_DIR/temp_wav_isrc_map.tsv"
 
 > "$TEMP_WAV_ISRC_MAP"
+> "$TEMP_ISRC_GAPS_FILE"
 
-python3 - "$SEARCH_PATH" "$ISRC_REGISTRANT_PREFIX" "$ISRC_YEAR_SUFFIX" "$TEMP_ISRC_COUNTER_FILE" "$TEMP_WAV_ISRC_MAP" << 'PYEOF'
+python3 - "$SEARCH_PATH" "$ISRC_REGISTRANT_PREFIX" "$ISRC_YEAR_SUFFIX" "$TEMP_ISRC_COUNTER_FILE" "$TEMP_WAV_ISRC_MAP" "$TEMP_ISRC_GAPS_FILE" << 'PYEOF'
 import glob, json, os, sys
 
-search_path, prefix, yy, counter_file, map_file = sys.argv[1:6]
+search_path, prefix, yy, counter_file, map_file, gaps_file = sys.argv[1:7]
 full_prefix = f"{prefix}{yy}".upper()
 max_seq = 0
+used_seqs = set()
 wav_map = {}
 
 for tf in sorted(glob.glob(f"{search_path}/*/*/tracks.json") + glob.glob(f"{search_path}/*/*/*/tracks.json")):
@@ -303,11 +310,17 @@ for tf in sorted(glob.glob(f"{search_path}/*/*/tracks.json") + glob.glob(f"{sear
                 wav_map[f"{artist}|{mwp}"] = isrc
             if isrc.startswith(full_prefix) and len(isrc) == 12 and isrc[7:].isdigit():
                 seq = int(isrc[7:])
+                used_seqs.add(seq)
                 if seq > max_seq:
                     max_seq = seq
 
 with open(counter_file, "w", encoding="utf-8") as f:
     f.write(str(max_seq))
+
+gaps = [seq for seq in range(1, max_seq + 1) if seq not in used_seqs]
+with open(gaps_file, "w", encoding="utf-8") as f:
+    for seq in gaps:
+        f.write(f"{seq}\n")
 
 with open(map_file, "w", encoding="utf-8") as f:
     for k, v in sorted(wav_map.items()):
@@ -315,4 +328,12 @@ with open(map_file, "w", encoding="utf-8") as f:
 PYEOF
 
 INITIAL_ISRC_MAX=$(cat "$TEMP_ISRC_COUNTER_FILE" 2>/dev/null || echo "0")
-echo "   🏷️  HARPER: US ISRC Agency Minter Ready (Prefix: ${ISRC_REGISTRANT_PREFIX}${ISRC_YEAR_SUFFIX} • Highest Allocated: $(printf '%05d' "$INITIAL_ISRC_MAX"))"
+INITIAL_GAP_COUNT=$(grep -c '^[0-9]' "$TEMP_ISRC_GAPS_FILE" 2>/dev/null | tr -d '[:space:]')
+INITIAL_GAP_COUNT=${INITIAL_GAP_COUNT:-0}
+if [ "$INITIAL_GAP_COUNT" -gt 0 ]; then
+    FIRST_GAP=$(head -n 1 "$TEMP_ISRC_GAPS_FILE")
+    LAST_GAP=$(tail -n 1 "$TEMP_ISRC_GAPS_FILE")
+    echo "   🏷️  HARPER: US ISRC Agency Minter Ready (Prefix: ${ISRC_REGISTRANT_PREFIX}${ISRC_YEAR_SUFFIX} • Highest Allocated: $(printf '%05d' "$INITIAL_ISRC_MAX") • Backfill Queue: ${INITIAL_GAP_COUNT} unassigned gap(s) [$(printf '%05d' "$FIRST_GAP")–$(printf '%05d' "$LAST_GAP")])"
+else
+    echo "   🏷️  HARPER: US ISRC Agency Minter Ready (Prefix: ${ISRC_REGISTRANT_PREFIX}${ISRC_YEAR_SUFFIX} • Highest Allocated: $(printf '%05d' "$INITIAL_ISRC_MAX") • Backfill Queue: 0 gaps)"
+fi
