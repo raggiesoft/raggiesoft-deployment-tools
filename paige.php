@@ -487,8 +487,8 @@ foreach ($narrativeDirs as $narrativeDir) {
                     foreach ($fmImageUrls as $idx => $imgUrl) {
                         $normSrc = preg_replace('/#.*$/', '', str_replace(['{{CDN}}', '{{cms}}', 'https://assets.raggiesoft.com'], '', trim($imgUrl)));
                         $cleanRel = ltrim($normSrc, '/');
-                        if ($cleanRel !== '' && strpos($cleanRel, 'raggiesoft-books/') !== 0 && strpos($cleanRel, 'raggiesoft-lore/') !== 0 && strpos($cleanRel, 'engine-room-records/') !== 0) {
-                            $cleanRel = 'raggiesoft-books/images/scenes/' . $cleanRel;
+                        if ($cleanRel !== '' && strpos($cleanRel, 'raggiesoft-books/') !== 0 && strpos($cleanRel, 'raggiesoft-lore/') !== 0 && strpos($cleanRel, 'engine-room-records/') !== 0 && strpos($cleanRel, 'stardust-engine/images/') !== 0) {
+                            $cleanRel = 'raggiesoft-books/images/scenes/' . preg_replace('#^scenes/#', '', $cleanRel);
                         }
                         $normSrc = '/' . $cleanRel;
                         if ($normSrc !== '/' && is_file($serverRoot . '/raggiesoft-assets' . $normSrc)) {
