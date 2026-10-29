@@ -34,9 +34,14 @@ for DIR in books/*/; do
     MANUSCRIPT_DIR="books/$BASE/manuscript"
     
     # PUBLIC DEPLOYMENT FOLDERS
-    # Target directories where the compiled artifacts will be written (resolved from /raggiesoft-deployment-tools)
-    OUT_LORE_DIR="../raggiesoft-narratives/lore/$BASE"
-    OUT_NARRATIVE_DIR="../raggiesoft-narratives/books/$BASE"
+    # Target directories where the compiled artifacts will be written (resolved from ~/Developer/raggiesoft-deployment-tools)
+    if [[ -d "../raggiesoft-servers" ]]; then
+        SERVER_ROOT="../raggiesoft-servers"
+    else
+        SERVER_ROOT=".."
+    fi
+    OUT_LORE_DIR="$SERVER_ROOT/raggiesoft-narratives/lore/$BASE"
+    OUT_NARRATIVE_DIR="$SERVER_ROOT/raggiesoft-narratives/books/$BASE"
 
     # -----------------------------------------
     # PROCESS LORE

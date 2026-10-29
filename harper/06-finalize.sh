@@ -48,8 +48,8 @@ else
     rm -f "$TEMP_SEARCH_INDEX"
 fi
 
-# Ensure the destination directory exists for the final catalog (resolved from /raggiesoft-deployment-tools)
-CATALOG_DIR="../raggiesoft-assets/engine-room-records/json"
+# Ensure the destination directory exists for the final catalog (resolved from ~/Developer/raggiesoft-deployment-tools)
+CATALOG_DIR="${SERVER_ROOT:-../raggiesoft-servers}/raggiesoft-assets/engine-room-records/json"
 mkdir -p "$CATALOG_DIR"
 CATALOG_FILE="$CATALOG_DIR/master-catalog.json"
 

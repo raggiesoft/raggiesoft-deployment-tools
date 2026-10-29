@@ -45,10 +45,14 @@ if [[ "$OSTYPE" == "darwin"* ]] && command -v caffeinate > /dev/null; then
 fi
 
 
-# 1. ESTABLISH PATHS (Dynamically resolved across OS)
-# Note: jenna-sync.sh now resides in /raggiesoft-deployment-tools (1 level below SERVER_ROOT).
+# 1. ESTABLISH PATHS (Dynamically resolved across OS from ~/Developer/raggiesoft-deployment-tools)
 WORKSPACE_DIR=$(cd "$(dirname "$0")" && pwd)
-SERVER_ROOT=$(cd "$WORKSPACE_DIR/.." && pwd)
+PARENT_ROOT=$(cd "$WORKSPACE_DIR/.." && pwd)
+if [ -d "$PARENT_ROOT/raggiesoft-servers" ]; then
+    SERVER_ROOT="$PARENT_ROOT/raggiesoft-servers"
+else
+    SERVER_ROOT="$PARENT_ROOT"
+fi
 ASSETS_ROOT="$SERVER_ROOT/raggiesoft-assets"
 
 HUB_ROOT="$SERVER_ROOT/raggiesoft.com/www"
@@ -64,7 +68,7 @@ CORPORATE_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/corporate"
 STORETRAINER_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/storetrainer"
 BACKSTAGE_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/backstage"
 PORTFOLIO_ROOT="$SERVER_ROOT/michaelpragsdale.com/www"
-DEPLOYMENT_TOOLS_ROOT="$SERVER_ROOT/raggiesoft-deployment-tools"
+DEPLOYMENT_TOOLS_ROOT="$WORKSPACE_DIR"
 NGINX_CONFIG_ROOT="$SERVER_ROOT/nginx-config"
 LOGS_DIR="$WORKSPACE_DIR/logs"
 
@@ -279,7 +283,7 @@ function run_integrity_check() {
     echo "👱‍♀️ JENNA: QA Protocol Initiated..."
     (
         cd "$WORKSPACE_DIR" && php -r "
-            \$hubRoot = realpath('../raggiesoft.com/www') ?: realpath('../raggiesoft-hub');
+            \$hubRoot = realpath('../raggiesoft-servers/raggiesoft.com/www') ?: realpath('../raggiesoft.com/www') ?: realpath('../raggiesoft-hub');
             if (!\$hubRoot || !is_dir(\$hubRoot)) { exit(1); }
             \$hasErrors = false;
             \$pattern = \$hubRoot . '/data/routes/*.json';
@@ -330,7 +334,7 @@ function run_orphan_audit() {
         cd "$WORKSPACE_DIR" && php -r "
             \$timestamp = \$argv[1];
             \$prettyDate = \$argv[2];
-            \$hubRoot = realpath('../raggiesoft.com/www') ?: realpath('../raggiesoft-hub');
+            \$hubRoot = realpath('../raggiesoft-servers/raggiesoft.com/www') ?: realpath('../raggiesoft.com/www') ?: realpath('../raggiesoft-hub');
             \$logsDir = __DIR__ . '/logs'; 
             
             \$definedViews = [];
@@ -437,7 +441,7 @@ function generate_sitemap() {
     echo "👱‍♀️ JENNA: Generating XML Sitemap and robots.txt..."
     (
         cd "$WORKSPACE_DIR" && php -r "
-            \$hubRoot = realpath('../raggiesoft.com/www') ?: realpath('../raggiesoft-hub');
+            \$hubRoot = realpath('../raggiesoft-servers/raggiesoft.com/www') ?: realpath('../raggiesoft.com/www') ?: realpath('../raggiesoft-hub');
             if (!\$hubRoot || !is_dir(\$hubRoot)) {
                 echo '      ❌ ERROR: Could not resolve Hub directory path.' . PHP_EOL;
                 exit(1);

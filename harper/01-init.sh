@@ -27,10 +27,15 @@ export HARPER_AUDIO_ERRORS=0
 export HARPER_ARCHIVE_ERRORS=0
 
 # --- PATH CONFIGURATION ---
-# Define the root path for artist records and metadata (resolved from /raggiesoft-deployment-tools)
-SEARCH_PATH="../raggiesoft-assets/engine-room-records/artists"
-METADATA_FILE="../raggiesoft-assets/engine-room-records/artists/metadata.json"
-export VAULTS_ROOT="$ROOT_DIR/../raggiesoft-vaults/engine-room-records/artists"
+# Define the root path for artist records and metadata (resolved from ~/Developer/raggiesoft-deployment-tools)
+if [ -d "$ROOT_DIR/../raggiesoft-servers" ]; then
+    export SERVER_ROOT="$ROOT_DIR/../raggiesoft-servers"
+else
+    export SERVER_ROOT="$ROOT_DIR/.."
+fi
+SEARCH_PATH="$SERVER_ROOT/raggiesoft-assets/engine-room-records/artists"
+METADATA_FILE="$SERVER_ROOT/raggiesoft-assets/engine-room-records/artists/metadata.json"
+export VAULTS_ROOT="$SERVER_ROOT/raggiesoft-vaults/engine-room-records/artists"
 
 # Temporary indices used for fast writes during parallel processing
 TEMP_SEARCH_INDEX="temp_search_index.jsonl" 

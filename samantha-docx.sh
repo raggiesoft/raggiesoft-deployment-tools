@@ -43,9 +43,14 @@ for DIR in books/*/; do
     LOCAL_LORE_MD="books/$BASE/$BASE-lore.md"
     MANUSCRIPT_DIR="books/$BASE/manuscript"
     
-    # PUBLIC DEPLOYMENT FOLDERS (resolved from /raggiesoft-deployment-tools)
-    OUT_LORE_DIR="../raggiesoft-narratives/lore/$BASE"
-    OUT_NARRATIVE_DIR="../raggiesoft-narratives/books/$BASE"
+    # PUBLIC DEPLOYMENT FOLDERS (resolved from ~/Developer/raggiesoft-deployment-tools)
+    if [[ -d "../raggiesoft-servers" ]]; then
+        SERVER_ROOT="../raggiesoft-servers"
+    else
+        SERVER_ROOT=".."
+    fi
+    OUT_LORE_DIR="$SERVER_ROOT/raggiesoft-narratives/lore/$BASE"
+    OUT_NARRATIVE_DIR="$SERVER_ROOT/raggiesoft-narratives/books/$BASE"
     FINAL_WEB_LORE="$OUT_LORE_DIR/${BASE}-lore.md"
 
     # -----------------------------------------

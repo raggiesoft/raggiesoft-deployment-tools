@@ -19,10 +19,15 @@
 # - The orphan directory check specifically looks for `.wav`, `.mp3`, and `tracks.json` files. If new formats are added (e.g., `.flac`), update the `ls` checks.
 # ============================================================================
 
-# Define paths relative to the script's location
+# Define paths relative to the script's location (~/Developer/raggiesoft-deployment-tools)
 WORKSPACE_DIR=$(dirname "$0")
 cd "$WORKSPACE_DIR" || exit
-SEARCH_PATH="../raggiesoft-assets/engine-room-records/artists"
+if [ -d "../raggiesoft-servers" ]; then
+    SERVER_ROOT="../raggiesoft-servers"
+else
+    SERVER_ROOT=".."
+fi
+SEARCH_PATH="$SERVER_ROOT/raggiesoft-assets/engine-room-records/artists"
 OUTPUT_FILE="engine-room-timeline.md"
 
 echo "🔍 Scanning archives for narrative timeline..."

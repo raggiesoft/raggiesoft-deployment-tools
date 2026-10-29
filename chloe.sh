@@ -27,7 +27,12 @@ echo ""
 # ------------------------------------------------------------------------------
 # Calculate absolute paths for workspace and the root developer directory
 WORKSPACE_DIR=$(cd "$(dirname "$0")" && pwd)
-ROOT_DEV_DIR=$(cd "$WORKSPACE_DIR/.." && pwd)
+PARENT_ROOT=$(cd "$WORKSPACE_DIR/.." && pwd)
+if [ -d "$PARENT_ROOT/raggiesoft-servers" ]; then
+    ROOT_DEV_DIR="$PARENT_ROOT/raggiesoft-servers"
+else
+    ROOT_DEV_DIR="$PARENT_ROOT"
+fi
 
 # Give Chloé her own private reading room for the manuscripts
 # Ensure output directory exists before generating bundle

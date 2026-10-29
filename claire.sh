@@ -29,9 +29,14 @@ echo "   ✨ Grabbing the trash bins..."
 WORKSPACE_DIR=$(dirname "$0")
 cd "$WORKSPACE_DIR" || exit
 
-# Target Path where artist data is stored (resolved from /raggiesoft-deployment-tools)
-SEARCH_PATH="../raggiesoft-assets/engine-room-records/artists"
-VAULTS_PATH="../raggiesoft-vaults/engine-room-records/artists"
+# Target Path where artist data is stored (resolved from ~/Developer/raggiesoft-deployment-tools)
+if [ -d "../raggiesoft-servers" ]; then
+    SERVER_ROOT="../raggiesoft-servers"
+else
+    SERVER_ROOT=".."
+fi
+SEARCH_PATH="$SERVER_ROOT/raggiesoft-assets/engine-room-records/artists"
+VAULTS_PATH="$SERVER_ROOT/raggiesoft-vaults/engine-room-records/artists"
 
 # Validate that the archives directory is accessible
 if [ ! -d "$SEARCH_PATH" ]; then

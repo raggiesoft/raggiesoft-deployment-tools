@@ -11,7 +11,10 @@ from google.analytics.data_v1beta.types import (
 
 PROPERTY_ID = "389345969"
 CREDENTIALS_PATH = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
-DISCOVER_JSON_PATH = os.path.join(os.path.dirname(__file__), "../raggiesoft-assets/raggiesoft-books/books/discover.json")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PARENT_DIR = os.path.dirname(BASE_DIR)
+SERVER_ROOT = os.path.join(PARENT_DIR, "raggiesoft-servers") if os.path.isdir(os.path.join(PARENT_DIR, "raggiesoft-servers")) else PARENT_DIR
+DISCOVER_JSON_PATH = os.path.join(SERVER_ROOT, "raggiesoft-assets/raggiesoft-books/books/discover.json")
 
 def get_trending_books():
     if not CREDENTIALS_PATH or not os.path.exists(CREDENTIALS_PATH):
@@ -35,7 +38,7 @@ def get_trending_books():
     book_views = {}
     
     # Load valid book slugs from catalog.json
-    catalog_path = os.path.join(os.path.dirname(__file__), "../raggiesoft-assets/raggiesoft-books/books/catalog.json")
+    catalog_path = os.path.join(SERVER_ROOT, "raggiesoft-assets/raggiesoft-books/books/catalog.json")
     valid_slugs = set()
     try:
         with open(catalog_path, 'r') as f:

@@ -64,8 +64,11 @@ $requestedBookSlug = isset($cliOptions['book']) ? trim((string)$cliOptions['book
 echo "👩‍🏫 PAIGE: Hi Michael. I'm right here with you. Ready to read and publish your manuscripts whenever you are.\n";
 echo "   Resolving workspace and library paths...\n";
 
-// Resolve base paths relative to /raggiesoft-deployment-tools/paige.php (1 level below server root)
-$serverRoot     = dirname(__DIR__);
+// Resolve base paths relative to ~/Developer/raggiesoft-deployment-tools/paige.php
+$parentRoot     = dirname(__DIR__);
+$serverRoot     = is_dir($parentRoot . '/raggiesoft-servers')
+    ? ($parentRoot . '/raggiesoft-servers')
+    : $parentRoot;
 $sourceBooksDir = $serverRoot . '/raggiesoft-narratives/books';
 $assetDestDir   = $serverRoot . '/raggiesoft-assets/raggiesoft-books/books';
 $indexDestFile  = $serverRoot . '/raggiesoft-assets/raggiesoft-books/json/search-index.json';
