@@ -42,7 +42,7 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
         mkdir -p "$VAULT_TARGET/archives/staging_mp3/lyrics"
         mkdir -p "$VAULT_TARGET/archives/staging_mp3/metadata"
         
-        # Stage necessary assets (audio, metadata, artwork, lyrics)
+        # Stage necessary assets (audio, metadata, artwork, lyrics, suno-prompts)
         cp "$VAULT_TARGET/mp3/"*.mp3 "$VAULT_TARGET/archives/staging_mp3/" 2>/dev/null
         cp streaming-services/song-metadata/*.md "$VAULT_TARGET/archives/staging_mp3/metadata/" 2>/dev/null
         cp "$README_FILE" "$VAULT_TARGET/archives/staging_mp3/"
@@ -52,6 +52,11 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
             cp lyrics/*.md "$VAULT_TARGET/archives/staging_mp3/lyrics/" 2>/dev/null
             cp lyrics/*.vtt "$VAULT_TARGET/archives/staging_mp3/lyrics/" 2>/dev/null
             [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" "$VAULT_TARGET/archives/staging_mp3/"
+        fi
+
+        if [ "$HAS_SUNO_PROMPTS" = true ]; then
+            mkdir -p "$VAULT_TARGET/archives/staging_mp3/suno-prompts"
+            cp suno-prompts/*.md "$VAULT_TARGET/archives/staging_mp3/suno-prompts/" 2>/dev/null
         fi
         
         # Zip the staged directory and cleanup
@@ -83,6 +88,11 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
             cp lyrics/*.vtt "$VAULT_TARGET/archives/staging_ogg/lyrics/" 2>/dev/null
             [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" "$VAULT_TARGET/archives/staging_ogg/"
         fi
+
+        if [ "$HAS_SUNO_PROMPTS" = true ]; then
+            mkdir -p "$VAULT_TARGET/archives/staging_ogg/suno-prompts"
+            cp suno-prompts/*.md "$VAULT_TARGET/archives/staging_ogg/suno-prompts/" 2>/dev/null
+        fi
         
         # Zip the staged directory and cleanup
         pushd "$VAULT_TARGET/archives/staging_ogg" > /dev/null
@@ -113,6 +123,11 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
             cp lyrics/*.vtt "$VAULT_TARGET/archives/staging_wav/lyrics/" 2>/dev/null
             [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" "$VAULT_TARGET/archives/staging_wav/"
         fi
+
+        if [ "$HAS_SUNO_PROMPTS" = true ]; then
+            mkdir -p "$VAULT_TARGET/archives/staging_wav/suno-prompts"
+            cp suno-prompts/*.md "$VAULT_TARGET/archives/staging_wav/suno-prompts/" 2>/dev/null
+        fi
         
         # Use 7z solid archiving with maximum compression (-mx=9) to handle massive uncompressed audio
         pushd "$VAULT_TARGET/archives/staging_wav" > /dev/null
@@ -142,6 +157,11 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
             cp lyrics/*.md "$VAULT_TARGET/archives/staging_flac/lyrics/" 2>/dev/null
             cp lyrics/*.vtt "$VAULT_TARGET/archives/staging_flac/lyrics/" 2>/dev/null
             [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" "$VAULT_TARGET/archives/staging_flac/"
+        fi
+
+        if [ "$HAS_SUNO_PROMPTS" = true ]; then
+            mkdir -p "$VAULT_TARGET/archives/staging_flac/suno-prompts"
+            cp suno-prompts/*.md "$VAULT_TARGET/archives/staging_flac/suno-prompts/" 2>/dev/null
         fi
         
         # Use 7z solid archiving for maximum efficiency on FLAC files
@@ -177,6 +197,11 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
             cp lyrics/*.vtt "$VAULT_TARGET/archives/staging_standard/lyrics/" 2>/dev/null
             [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" "$VAULT_TARGET/archives/staging_standard/"
         fi
+
+        if [ "$HAS_SUNO_PROMPTS" = true ]; then
+            mkdir -p "$VAULT_TARGET/archives/staging_standard/suno-prompts"
+            cp suno-prompts/*.md "$VAULT_TARGET/archives/staging_standard/suno-prompts/" 2>/dev/null
+        fi
         
         pushd "$VAULT_TARGET/archives/staging_standard" > /dev/null
         "$SEVEN_ZIP_CMD" a -tzip -mx=5 "../${ARCHIVE_BASE_NAME}-standard-archive.zip" * || HARPER_ARCHIVE_ERRORS=$((HARPER_ARCHIVE_ERRORS + 1))
@@ -206,6 +231,11 @@ if [ "$USE_SEVEN_ZIP" = true ] && { [ "$METADATA_ONLY" = false ] || [ "$ALBUM_MI
             cp lyrics/*.md web-mp3/staging_free/lyrics/ 2>/dev/null
             cp lyrics/*.vtt web-mp3/staging_free/lyrics/ 2>/dev/null
             [ -f "$COMBINED_LYRICS_FILE" ] && cp "$COMBINED_LYRICS_FILE" web-mp3/staging_free/
+        fi
+
+        if [ "$HAS_SUNO_PROMPTS" = true ]; then
+            mkdir -p web-mp3/staging_free/suno-prompts
+            cp suno-prompts/*.md web-mp3/staging_free/suno-prompts/ 2>/dev/null
         fi
         
         pushd web-mp3/staging_free 

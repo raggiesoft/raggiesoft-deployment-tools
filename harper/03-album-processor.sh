@@ -248,6 +248,9 @@ while read -r tracks_file; do
     HAS_LYRICS=false
     if [ -d "lyrics" ]; then HAS_LYRICS=true; fi
 
+    HAS_SUNO_PROMPTS=false
+    if [ -d "suno-prompts" ]; then HAS_SUNO_PROMPTS=true; fi
+
     # --------------------------------------------------------------------------
     # 5. Master Read-Me Generation
     # --------------------------------------------------------------------------
@@ -268,11 +271,14 @@ while read -r tracks_file; do
         echo "Full License Details: https://corporate.raggiesoft.com/licensing"
         echo "Copyright (c) $REAL_RELEASE_YEAR Michael P. Ragsdale / RaggieSoft."
         echo ""
-        echo "PRODUCTION DISCLAIMER:"
+        echo "PRODUCTION DISCLAIMER & CC BY-SA 4.0 RECREATION PROMPTS:"
         echo "Audio Generation: Suno."
         echo "AI Elements: Vocals, Instrumentation, Composition."
         echo "Human Elements: Lyrics, Narrative Lore."
         echo "Commercial Rights Cleared via Commercial-Tier Suno Premium."
+        echo "Open-Culture Recreation (/suno-prompts/): Because this release is licensed under CC BY-SA 4.0,"
+        echo "each song's Suno style prompt, exclusions, 75% Cover Audio Influence settings, and structural"
+        echo "lyric cues are packaged in the /suno-prompts/ folder so others can study or recreate them."
         echo ""
         echo "TRACKLIST:"
     } > "$README_FILE"

@@ -16,7 +16,7 @@ Harper (v21.8.0) is the high-energy, modular Bash workhorse that automates the e
     
 - **DDEX-Compliant Metadata & AI Transparency:** Deep-parses Schema.org JSON and `tracks.json` (`title` + optional `version` key) to generate DistroKid-ready DSP sheets—including per-album `dsp-upload-sheet.md` (with pre-separated `Name` and `Version` fields for strict distributor title validation) and per-artist `*-dsp-upload-guide.md` rollups. When `.version` is defined on a track in `tracks.json` (e.g., `"title": "Electric Color", "version": "Live in Norfolk"`), Harper automatically constructs the composite tag title `$songName ($versionInformation)` (`"Electric Color (Live in Norfolk)"`) and stamps it into BWF WAV headers, ID3v2/v1 tags (MP3 128k & V0), and Vorbis Comments (OGG Q9 & FLAC). Injects granular AI disclaimers—explicitly dividing human-authored lyrics/lore from synthetic audio—directly into archive `README.txt` files and audio containers.
     
-- **Vault Archiving:** Decouples heavy standard and audiophile tiers into ultra-compressed 7-Zip archives (`.zip` and `.7z`).
+- **Vault Archiving & CC BY-SA 4.0 Open-Culture Packaging:** Decouples heavy standard and audiophile tiers into ultra-compressed 7-Zip archives (`.zip` and `.7z`), automatically bundling `/lyrics/`, `/metadata/`, and the per-song `/suno-prompts/` directory (with `75%` Cover Audio Influence settings, style prompts, exclusions, and structural lyric cues) so anyone under **CC BY-SA 4.0** knows how to recreate every track.
     
 - **Art Upscaling:** Integrates Real-ESRGAN for automated 4K album art enhancement.
     
