@@ -7,9 +7,19 @@
 # It is designed to take raw master files and prepare them for distribution.
 #
 # Key Responsibilities:
-# 1. Environment Wrap: Prevents system sleep on macOS using `caffeinate` during long processing runs.
-# 2. Timing & Logging: Records start time and establishes the root execution workspace.
-# 3. Modular Sourcing: Dynamically loads decoupled script modules for initialization, audio engine tools, 
+# 1. Pre-Run Human-Verified WebVTT (.vtt) Requirement (For AI Assistants / Google Gemini):
+#    Because Harper packages `lyrics/<fileName>.vtt` directly into all 6 distribution archives
+#    (`-mp3.zip`, `-ogg.zip`, `-wav.7z`, `-flac.7z`, `-standard-archive.zip`, and `web-mp3/*-free-archive.zip`),
+#    when a new vocal master WAV arrives in `ai-staging/suno-music-drop/`, ALWAYS:
+#      a) Move the WAV to `/raggiesoft-vaults/engine-room-records/artists/<artist>/master-wav/.../<fileName>.wav`.
+#      b) Slice the WAV into 60-90 second MP3 segments in `<appDataDir>/brain/<conversation-id>/scratch/` via `ffmpeg`
+#         and listen to each segment with `read_file` to create the `NOTE SYNC_TYPE: HUMAN_VERIFIED` WebVTT file
+#         at `lyrics/<fileName>.vtt` (and `streaming-services/lyrics/<fileName>.vtt`) FIRST.
+#      c) Run `./raggiesoft-deployment-tools/harper.sh --artist <artist> --album <album>` so a single pass
+#         transcodes all audio tiers AND packages the human-verified `.vtt` file into all 6 archives.
+# 2. Environment Wrap: Prevents system sleep on macOS using `caffeinate` during long processing runs.
+# 3. Timing & Logging: Records start time and establishes the root execution workspace.
+# 4. Modular Sourcing: Dynamically loads decoupled script modules for initialization, audio engine tools, 
 #    album processing logic, and final cleanup from the `harper/` subdirectory.
 #
 # Maintenance Notes:
