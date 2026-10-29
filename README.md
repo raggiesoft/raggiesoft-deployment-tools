@@ -9,7 +9,7 @@ Centralized DevOps, CI/CD, audio mastering, and content compilation orchestratio
 - **[`sarah-deploy.sh`](./sarah-deploy.sh) (Sarah — Autonomous Server Deployment):**
   Zero-root continuous deployment agent running on the NYC1 DigitalOcean Droplet via `systemd` timer (`sarah.timer`), pulling pre-compiled static and PHP payloads from GitHub into `/var/www/*`.
 - **[`harper.sh`](./harper.sh) & [`harper/`](./harper/) (Harper — The Studio Engineer):**
-  Modular multi-threaded FFmpeg audio mastering, Broadcast Wave Format (BWF) RIFF/BEXT metadata stamping, Real-ESRGAN cover art upscaling, DistroKid metadata sheet generation, and WhisperX / Human-Verified WebVTT lyric alignment.
+  Modular multi-threaded FFmpeg audio mastering, Broadcast Wave Format (BWF) RIFF/BEXT metadata stamping, Real-ESRGAN cover art upscaling, DistroKid metadata sheet generation, CC BY-SA 4.0 `/suno-prompts/` archive packaging, and Google Gemini Multimodal Audio-to-WebVTT (`SYNC_TYPE: HUMAN_VERIFIED`) lyric alignment.
 - **[`claire.sh`](./claire.sh) (Claire — Technical Debt Sweeper):**
   Deterministic build artifact cleaner for the Engine Room Records studio archives.
 

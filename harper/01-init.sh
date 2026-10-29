@@ -35,6 +35,7 @@ export VAULTS_ROOT="$ROOT_DIR/../raggiesoft-vaults/engine-room-records/artists"
 # Temporary indices used for fast writes during parallel processing
 TEMP_SEARCH_INDEX="temp_search_index.jsonl" 
 TEMP_CATALOG_INDEX="temp_catalog_index.jsonl" 
+export TEMP_GEMINI_VTT_QUEUE="$ROOT_DIR/temp_gemini_vtt_queue.txt"
 
 echo "   🎚️  Targeting Studio Archives: $SEARCH_PATH"
 echo "   🔐 Targeting Local Master Vaults: $VAULTS_ROOT"
@@ -42,6 +43,7 @@ echo "   🔐 Targeting Local Master Vaults: $VAULTS_ROOT"
 # Initialize Indices by truncating/creating them
 > "$TEMP_SEARCH_INDEX" 
 > "$TEMP_CATALOG_INDEX"
+> "$TEMP_GEMINI_VTT_QUEUE"
 
 # --- ARGUMENT PARSING ---
 # Default execution flags

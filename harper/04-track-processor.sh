@@ -13,12 +13,15 @@
 # 2. Stamps Broadcast Wave Format (BWF) metadata into local master copy.
 # 3. Formats and writes the DistroKid quick-copy metadata sheet.
 # 4. Scrubs markdown tags from lyrics to create pure text for DSP upload.
-# 5. Executes AI vocal isolation (Demucs) and forced alignment (WhisperX) for VTTs.
+# 5. Verifies and syncs `SYNC_TYPE: HUMAN_VERIFIED` WebVTT (`.vtt`) files generated
+#    via Google Gemini Multimodal Audio Listening (WhisperX/Demucs permanently retired),
+#    and queues any newly mastered vocal tracks lacking a `.vtt` for Gemini.
 # 6. Spawns `press_audio_formats` asynchronously for multi-tier rendering.
 #
 # Maintenance Notes:
 # - `$track_json` must be defined in the parent shell loop prior to sourcing.
-# - Runs `demucs` and `whisperx` sequentially to prevent GPU/CPU OOM crashes.
+# - WebVTT (`.vtt`) timed lyric generation is handled by Google Gemini listening
+#   directly to the rendered audio alongside `lyrics/$FILE_BASE.md`.
 # - Leverages `jobs -p` logic to throttle parallel FFmpeg spawns to `$MAX_JOBS`.
 # ==============================================================================
 
@@ -358,61 +361,30 @@ if [ -f "$LYRIC_MD" ]; then
     fi
     
     # --------------------------------------------------------------------------
-    # 6. WhisperX Auto-Alignment (VTT Generation)
+    # 6. WebVTT Verification & Google Gemini Multimodal Audio-to-VTT Queue
+    #    (WhisperX & Demucs Permanently Retired in Favor of Google Gemini)
     # --------------------------------------------------------------------------
+    # ARCHITECTURAL NOTE:
+    # Frame-accurate `NOTE SYNC_TYPE: HUMAN_VERIFIED` WebVTT (`.vtt`) files are
+    # authored by Google Gemini (Antigravity) listening directly to the rendered
+    # audio (`web-mp3/$FILE_BASE.mp3` or 60–90s `ffmpeg` slices) while reading
+    # `lyrics/$FILE_BASE.md`. Harper protects existing `.vtt` files, keeps
+    # `lyrics/$FILE_BASE.vtt` and `streaming-services/lyrics/$FILE_BASE.vtt`
+    # synchronized 1:1, and queues any newly mastered vocal tracks missing a
+    # `.vtt` file so Gemini can listen and generate them.
     LYRIC_VTT="streaming-services/lyrics/$FILE_BASE.vtt"
     SOURCE_VTT="lyrics/$FILE_BASE.vtt"
-    
-    if [ -f "$LYRIC_TXT" ] && [ -f "$WAV_FILE" ] && [ "$NO_VTT" = false ]; then
-        
-        # Check if the user placed a manual VTT in the source lyrics/ folder
-        if [ -f "$SOURCE_VTT" ] && grep -q "SYNC_TYPE: HUMAN_VERIFIED" "$SOURCE_VTT"; then
-            echo "         🛡️   Human-Verified source VTT detected! Copying directly and skipping WhisperX."
-            cp "$SOURCE_VTT" "$LYRIC_VTT"
-        else
-            # Check if there's already a verified one in the build folder to protect it
-            IS_HUMAN_VERIFIED=false
-            if [ -f "$LYRIC_VTT" ] && grep -q "SYNC_TYPE: HUMAN_VERIFIED" "$LYRIC_VTT"; then
-                IS_HUMAN_VERIFIED=true
-            fi
-            
-            if [ "$IS_HUMAN_VERIFIED" = true ]; then
-                echo "         🛡️   Human-Verified VTT detected in build folder! Protecting from WhisperX overwrite."
-            elif [ ! -f "$LYRIC_VTT" ] || [ "$OVERWRITE" = true ]; then
-            echo "         -> 🤖 Running Demucs Vocal Isolation & Whisper VTT Forced Alignment..."
-            
-            # Run HuggingFace completely offline to prevent rate-limiting and token warnings for both Demucs and Whisper
-            export HF_HUB_OFFLINE=1
-            
-            # Step A: Vocal Isolation (MPS Accelerated via PyTorch)
-            PYTHONWARNINGS="ignore" demucs --two-stems=vocals -o demucs_out "$WAV_FILE"
-            VOCALS_STEM="demucs_out/htdemucs/$FILE_BASE/vocals.wav"
-            
-            if [ -f "$VOCALS_STEM" ]; then
-                # Step B: Forced Alignment 
-                PYTHONWARNINGS="ignore" whisperx "$VOCALS_STEM" \
-                    --output_dir lyrics \
-                    --output_format vtt \
-                    --model large-v2 \
-                    --compute_type int8 \
-                    --language en \
-                    --max_line_width 40 \
-                    --max_line_count 1
-                
-                # whisperx outputs as vocals.vtt based on the stem filename
-                if [ -f "lyrics/vocals.vtt" ]; then
-                    mv "lyrics/vocals.vtt" "$SOURCE_VTT"
-                    cp "$SOURCE_VTT" "$LYRIC_VTT"
-                fi
-                
-                # Step C: Studio Cleanup
-                rm -rf demucs_out
-            else
-                echo "         ⚠️  Demucs failed to isolate vocals."
-            fi
-        else
-            echo "         ⏭️  DSP VTT already generated! Fast-forwarding."
-        fi
+
+    if [ -f "$SOURCE_VTT" ]; then
+        echo "         🛡️   Gemini-Verified source VTT detected ($SOURCE_VTT)! Syncing to streaming-services/lyrics/."
+        cp "$SOURCE_VTT" "$LYRIC_VTT"
+    elif [ -f "$LYRIC_VTT" ]; then
+        echo "         🛡️   Existing VTT detected in build folder ($LYRIC_VTT)! Back-syncing to lyrics/."
+        cp "$LYRIC_VTT" "$SOURCE_VTT"
+    elif [ -s "$LYRIC_TXT" ] && { [ -f "$WAV_FILE" ] || [ -f "$SOURCE_WAV" ]; } && [ "$NO_VTT" = false ]; then
+        echo "         ✨  HARPER -> GEMINI VTT QUEUE: '$TAG_TITLE' ($FILE_BASE) has audio + lyrics and is ready for Google Gemini Multimodal VTT alignment."
+        if [ -n "${TEMP_GEMINI_VTT_QUEUE:-}" ]; then
+            echo "$ARTIST_SLUG/$ALBUM_SLUG/$FILE_BASE" >> "$TEMP_GEMINI_VTT_QUEUE"
         fi
     fi
 
