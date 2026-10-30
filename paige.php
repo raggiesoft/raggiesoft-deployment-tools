@@ -420,6 +420,8 @@ foreach ($narrativeDirs as $narrativeDir) {
 
                 $yamlTitle = "Part {$partNum}";
                 $partDate = '';
+                $partStardate = '';
+                $partRealmTime = '';
                 $partStartTime = '';
                 $partLocation = '';
                 $partImages = [];
@@ -440,6 +442,12 @@ foreach ($narrativeDirs as $narrativeDir) {
                     }
                     if (preg_match('/^date:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mDate)) {
                         $partDate = trim($mDate[1], " \t\n\r\0\x0B\"'");
+                    }
+                    if (preg_match('/^stardate:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mStardate)) {
+                        $partStardate = trim($mStardate[1], " \t\n\r\0\x0B\"'");
+                    }
+                    if (preg_match('/^realm_time:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mRealmTime)) {
+                        $partRealmTime = trim($mRealmTime[1], " \t\n\r\0\x0B\"'");
                     }
                     if (preg_match('/^start_time:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mTime)) {
                         $partStartTime = trim($mTime[1], " \t\n\r\0\x0B\"'");
@@ -561,6 +569,8 @@ foreach ($narrativeDirs as $narrativeDir) {
                     'url' => str_replace('/raggiesoft-books/books', '', $routeUrl)
                 ];
                 if ($partDate !== '') $partEntry['date'] = $partDate;
+                if ($partStardate !== '') $partEntry['stardate'] = $partStardate;
+                if ($partRealmTime !== '') $partEntry['realm_time'] = $partRealmTime;
                 if ($partStartTime !== '') $partEntry['start_time'] = $partStartTime;
                 if ($partLocation !== '') $partEntry['location'] = $partLocation;
                 if ($partImgCount > 0) {
@@ -644,6 +654,7 @@ foreach ($narrativeDirs as $narrativeDir) {
         $generatedToc = [
             'series_title' => $seriesTitle,
             'series_slug' => $seriesSlug,
+            'series_theme' => $seriesMeta['series_theme'] ?? '',
             'series_description' => $seriesMeta['series_description'] ?? '',
             'series_description_long' => $longDesc,
             'series_image' => $seriesMeta['series_image'] ?? '',
