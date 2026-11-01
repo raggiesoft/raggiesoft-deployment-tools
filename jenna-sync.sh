@@ -44,6 +44,50 @@ if [[ "$OSTYPE" == "darwin"* ]] && command -v caffeinate > /dev/null; then
     fi
 fi
 
+# ============================================================================
+# 0. ZERO-INTERACTIVE / AUTOMATIC "YES" ENVIRONMENT ENFORCEMENT
+# ============================================================================
+# Guarantees that Jenna NEVER blocks or hangs waiting for keyboard input:
+# 1. Node / npm / npx / Next.js / Angular / Astro / Nuxt / Vite:
+#    - `npm_config_yes=true`: Automatically answers "Yes" to any npm/npx install or upgrade prompt.
+#    - `CI=true`: Disables interactive CLI spinners, pagers, and first-run wizard prompts.
+#    - `__NEXT_AGENT_UPGRADE=security`: Combined with `CI=true`, instructs Next.js 16.4+ (`nudge.js`)
+#      not to pause on the interactive `cli-select` upgrade prompt or throw `SecurityFatalError`
+#      during automated/agent builds while Jenna handles auto-upgrading Next.js directly.
+#    - `NEXT_TELEMETRY_DISABLED=1`, `NG_CLI_ANALYTICS=false`, `NG_FORCE_TTY=false`,
+#      `ASTRO_TELEMETRY_DISABLED=1`, `NUXT_TELEMETRY_DISABLED=1`, `NO_UPDATE_NOTIFIER=1`:
+#      Suppresses framework telemetry & update-notifier prompts across all subdomains.
+# 2. Git & SSH:
+#    - `GIT_TERMINAL_PROMPT=0`: Never blocks on an interactive HTTPS username/password prompt.
+#    - `GIT_MERGE_AUTOEDIT=no` & `GIT_EDITOR=true`: Never opens vim/nano during `git pull` merges.
+#    - `GIT_PAGER=cat` & `PAGER=cat`: Never pauses output in `less`.
+#    - `GIT_SSH_COMMAND`: Enforces `BatchMode=yes` and `StrictHostKeyChecking=accept-new`
+#      so SSH never pauses to ask `(yes/no/[fingerprint])` on rotated GitHub host keys.
+# 3. Homebrew / GitHub CLI:
+#    - `HOMEBREW_NO_AUTO_UPDATE=1`, `GH_PROMPT_DISABLED=1`: Disables CLI auto-update/interactive prompts.
+# ============================================================================
+export CI=true
+export npm_config_yes=true
+export npm_config_fund=false
+export npm_config_audit=false
+export npm_config_update_notifier=false
+export NO_UPDATE_NOTIFIER=1
+export NEXT_TELEMETRY_DISABLED=1
+export __NEXT_AGENT_UPGRADE=security
+export NG_CLI_ANALYTICS=false
+export NG_FORCE_TTY=false
+export ASTRO_TELEMETRY_DISABLED=1
+export NUXT_TELEMETRY_DISABLED=1
+export GIT_TERMINAL_PROMPT=0
+export GIT_MERGE_AUTOEDIT=no
+export GIT_EDITOR=true
+export GIT_PAGER=cat
+export PAGER=cat
+export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+export HOMEBREW_NO_AUTO_UPDATE=1
+export HOMEBREW_NO_INSTALL_CLEANUP=1
+export GH_PROMPT_DISABLED=1
+
 
 # 1. ESTABLISH PATHS (Dynamically resolved across OS from ~/Developer/raggiesoft-deployment-tools)
 WORKSPACE_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -185,7 +229,7 @@ function run_github_preflight() {
         local out443
         out443=$(run_with_timeout 5 ssh -T -p 443 -o HostName=ssh.github.com -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=accept-new git@github.com 2>&1)
         if echo "$out443" | grep -qi "successfully authenticated"; then
-            export GIT_SSH_COMMAND="ssh -o Port=443 -o HostName=ssh.github.com -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5"
+            export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o Port=443 -o HostName=ssh.github.com -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
             ssh_ok=true
             echo "      ✓ GitHub SSH auto-routed over Port 443 (ssh.github.com:443)."
         fi
@@ -269,6 +313,47 @@ function git() {
             command git "$@"
             ;;
     esac
+}
+
+# ============================================================================
+# Helper: run_non_interactive_npm <subcommand...>
+# ============================================================================
+# Feeds an automatic stream of "y" (Yes) to stdin while preserving the exact
+# exit code of `npm` via `PIPESTATUS[1]`. If Next.js, Angular, Nuxt, Astro, or
+# npm prompts for an upgrade or dependency installation (e.g., `[Y/n]`), it is
+# automatically approved without blocking the deployment pipeline.
+function run_non_interactive_npm() {
+    export PATH="/opt/homebrew/bin:$PATH"
+    yes 2>/dev/null | npm --yes "$@"
+    return "${PIPESTATUS[1]}"
+}
+
+# ============================================================================
+# Helper: auto_upgrade_nextjs_if_requested
+# ============================================================================
+# Checks Next.js 16.4+'s built-in `prepareUpgrade` module before building.
+# If Next.js flags a recommended security/version upgrade (`status === "ready"`),
+# automatically approves ("Yes") and installs the target `next` and
+# `eslint-config-next` versions non-interactively so `next build` never prompts.
+function auto_upgrade_nextjs_if_requested() {
+    export PATH="/opt/homebrew/bin:$PATH"
+    if [ "$CAN_PUSH_GITHUB" = true ] && [ -f "./node_modules/next/dist/lib/upgrade/prepare-upgrade.js" ]; then
+        local NEXT_TARGET_VER
+        NEXT_TARGET_VER=$(run_with_timeout 6 node -e '
+            const { prepareUpgrade } = require("./node_modules/next/dist/lib/upgrade/prepare-upgrade.js");
+            prepareUpgrade(process.cwd(), "security")
+                .then(r => {
+                    if (r && r.status === "ready" && r.targetVersion && r.targetVersion !== r.installedVersion) {
+                        process.stdout.write(r.targetVersion);
+                    }
+                })
+                .catch(() => {});
+        ' 2>/dev/null)
+        if [ -n "$NEXT_TARGET_VER" ]; then
+            echo "      ⚡ Next.js requested an upgrade to v${NEXT_TARGET_VER}: Auto-approving ('Yes') and installing..."
+            run_non_interactive_npm install "next@${NEXT_TARGET_VER}" "eslint-config-next@${NEXT_TARGET_VER}" --save-exact
+        fi
+    fi
 }
 
 function show_help() {
@@ -666,11 +751,11 @@ function do_push() {
     echo "   -> Syncing /components-library to applications..."
     if [ -d "$SERVER_ROOT/components-library" ]; then
         if [ -d "$HUB_ROOT" ]; then
-            cp -r "$SERVER_ROOT/components-library/"* "$HUB_ROOT/includes/"
+            command cp -rf "$SERVER_ROOT/components-library/"* "$HUB_ROOT/includes/"
             echo "      ✓ Synced components to raggiesoft-hub"
         fi
         if [ -d "$BOOKS_ROOT" ]; then
-            cp -r "$SERVER_ROOT/components-library/"* "$BOOKS_ROOT/includes/"
+            command cp -rf "$SERVER_ROOT/components-library/"* "$BOOKS_ROOT/includes/"
             echo "      ✓ Synced components to raggiesoft-book-library"
         fi
     fi
@@ -850,8 +935,7 @@ function do_push() {
     if [ -d "$NEBULAE_ROOT" ]; then
         cd "$NEBULAE_ROOT"
         if [ -f "$NEBULAE_ROOT/package.json" ]; then
-            export PATH="/opt/homebrew/bin:$PATH"
-            npm run build
+            run_non_interactive_npm run build
             if [ $? -ne 0 ]; then
                 echo "🛑 JENNA: ABORTING! Nebulae Observatory build failed."
                 exit 1
@@ -916,9 +1000,18 @@ function do_push() {
     if [ -d "$LORE_ROOT" ]; then
         cd "$LORE_ROOT"
         
+        auto_upgrade_nextjs_if_requested
         echo "      > Compiling Static HTML Graph..."
-        export PATH="/opt/homebrew/bin:$PATH"
-        npm run build
+        run_non_interactive_npm run build
+        if [ $? -ne 0 ]; then
+            echo "      ⚠️  Next.js build requested a retry; re-running automatically..."
+            auto_upgrade_nextjs_if_requested
+            run_non_interactive_npm run build
+            if [ $? -ne 0 ]; then
+                echo "🛑 JENNA: ABORTING! Next.js static build failed in raggiesoft-lore."
+                exit 1
+            fi
+        fi
         
         git add .
         
@@ -951,9 +1044,8 @@ function do_push() {
         cd "$MUSIC_ROOT"
         
         echo "      > Compiling dynamic Engine Room Records catalog & static PWA build..."
-        export PATH="/opt/homebrew/bin:$PATH"
-        npm run build
-        npm run check
+        run_non_interactive_npm run build
+        run_non_interactive_npm run check
         if [ $? -ne 0 ]; then
             echo "🛑 JENNA: ABORTING! SvelteKit check failed in raggiesoft-music."
             exit 1
@@ -988,8 +1080,7 @@ function do_push() {
     if [ -d "$ENGINEROOM_ROOT" ] && [ -f "$ENGINEROOM_ROOT/package.json" ]; then
         echo "   -> Packaging Engine Room Records Imprint (engineroom.raggiesoft.com)..."
         cd "$ENGINEROOM_ROOT"
-        export PATH="/opt/homebrew/bin:$PATH"
-        npm run build
+        run_non_interactive_npm run build
         if [ $? -ne 0 ]; then
             echo "🛑 JENNA: ABORTING! Astro 6 build failed in engineroom.raggiesoft.com."
             exit 1
@@ -1017,8 +1108,7 @@ function do_push() {
     if [ -d "$STARDUST_ROOT" ] && [ -f "$STARDUST_ROOT/package.json" ]; then
         echo "   -> Packaging The Stardust Engine (stardust.raggiesoft.com)..."
         cd "$STARDUST_ROOT"
-        export PATH="/opt/homebrew/bin:$PATH"
-        npm run build
+        run_non_interactive_npm run build
         if [ $? -ne 0 ]; then
             echo "🛑 JENNA: ABORTING! Nuxt 4 build failed in stardust.raggiesoft.com."
             exit 1
@@ -1046,8 +1136,7 @@ function do_push() {
     if [ -d "$CORPORATE_ROOT" ] && [ -f "$CORPORATE_ROOT/package.json" ]; then
         echo "   -> Packaging RaggieSoft Media Corporate Hub (corporate.raggiesoft.com)..."
         cd "$CORPORATE_ROOT"
-        export PATH="/opt/homebrew/bin:$PATH"
-        npm run build
+        run_non_interactive_npm run build
         if [ $? -ne 0 ]; then
             echo "🛑 JENNA: ABORTING! Bootstrap 5.3.8 build failed in corporate.raggiesoft.com."
             exit 1
@@ -1075,8 +1164,7 @@ function do_push() {
     if [ -d "$STORETRAINER_ROOT" ] && [ -f "$STORETRAINER_ROOT/package.json" ]; then
         echo "   -> Packaging RaggieSoft StoreTrainer (storetrainer.raggiesoft.com)..."
         cd "$STORETRAINER_ROOT"
-        export PATH="/opt/homebrew/bin:$PATH"
-        npm run build
+        run_non_interactive_npm run build
         if [ $? -ne 0 ]; then
             echo "🛑 JENNA: ABORTING! Vanilla TypeScript build failed in storetrainer.raggiesoft.com."
             exit 1
@@ -1104,8 +1192,7 @@ function do_push() {
     if [ -d "$BACKSTAGE_ROOT" ] && [ -f "$BACKSTAGE_ROOT/package.json" ]; then
         echo "   -> Packaging RaggieSoft Backstage (backstage.raggiesoft.com)..."
         cd "$BACKSTAGE_ROOT"
-        export PATH="/opt/homebrew/bin:$PATH"
-        npm run build
+        run_non_interactive_npm run build
         if [ $? -ne 0 ]; then
             echo "🛑 JENNA: ABORTING! Web Awesome Pro SSG build failed in backstage.raggiesoft.com."
             exit 1
@@ -1136,8 +1223,7 @@ function do_push() {
         cd "$PORTFOLIO_ROOT"
 
         echo "      > Compiling Angular 19 Zoneless static build..."
-        export PATH="/opt/homebrew/bin:$PATH"
-        npm run build
+        run_non_interactive_npm run build
         if [ $? -ne 0 ]; then
             echo "🛑 JENNA: ABORTING! Angular production build failed in raggiesoft-portfolio."
             exit 1

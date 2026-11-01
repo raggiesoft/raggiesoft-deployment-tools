@@ -17,6 +17,26 @@
 # "I check for updates every 5 minutes. If Jenna pushed code, I deploy it instantly."
 # NO SUDO REQUIRED.
 
+# ZERO-INTERACTIVE / AUTOMATIC "YES" ENVIRONMENT ENFORCEMENT
+export CI=true
+export npm_config_yes=true
+export npm_config_fund=false
+export npm_config_audit=false
+export npm_config_update_notifier=false
+export NO_UPDATE_NOTIFIER=1
+export NEXT_TELEMETRY_DISABLED=1
+export __NEXT_AGENT_UPGRADE=security
+export NG_CLI_ANALYTICS=false
+export NG_FORCE_TTY=false
+export ASTRO_TELEMETRY_DISABLED=1
+export NUXT_TELEMETRY_DISABLED=1
+export GIT_TERMINAL_PROMPT=0
+export GIT_MERGE_AUTOEDIT=no
+export GIT_EDITOR=true
+export GIT_PAGER=cat
+export PAGER=cat
+export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+
 # SECURITY CHECK: SARAH REFUSES TO RUN AS ROOT
 # Prevent deployment script from accidentally modifying system files or creating root-owned web assets
 if [ "$EUID" -eq 0 ]; then
@@ -96,7 +116,7 @@ function deploy_site() {
     # Fallback build if pre-compiled sync directory is missing
     if [ ! -d "$SYNC_DIR" ] && [ -f "package.json" ]; then
         echo "   -> Pre-compiled payload missing. Building $SITE_NAME static bundle..."
-        npm run build 2>/dev/null || true
+        yes 2>/dev/null | npm --yes run build 2>/dev/null || true
     fi
 
     if [ ! -d "$SYNC_DIR" ]; then
