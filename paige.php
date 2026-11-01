@@ -661,6 +661,7 @@ foreach ($narrativeDirs as $narrativeDir) {
             'series_title' => $seriesTitle,
             'series_slug' => $seriesSlug,
             'series_theme' => $seriesMeta['series_theme'] ?? '',
+            'series_short_description' => $seriesMeta['series_short_description'] ?? ($seriesMeta['series_description'] ?? ''),
             'series_description' => $seriesMeta['series_description'] ?? '',
             'series_description_long' => $longDesc,
             'series_image' => $seriesMeta['series_image'] ?? '',
@@ -674,10 +675,11 @@ foreach ($narrativeDirs as $narrativeDir) {
         echo "  [Assets] Saved auto-discovered Table of Contents (with {$seriesIllustrationCount} illustrations & eBook sizes) to toc.json\n";
     }
 
-    // Populate the master catalog with entry details
+    // Populate the master catalog with entry details (separating quick-glance short_description from longer main description)
     $masterCatalog[] = [
         'slug' => $seriesSlug,
         'title' => $seriesTitle,
+        'short_description' => $seriesMeta['series_short_description'] ?? ($seriesMeta['series_description'] ?? ''),
         'description' => $seriesMeta['series_description'] ?? '',
         'image' => $seriesMeta['series_image'] ?? '',
         'first_route' => $firstRouteUrl,
