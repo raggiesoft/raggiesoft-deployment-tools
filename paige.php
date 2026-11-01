@@ -432,8 +432,14 @@ foreach ($narrativeDirs as $narrativeDir) {
                 if (preg_match('/^---([\s\S]*?)---/', ltrim($partContent), $matches)) {
                     $frontmatterRaw = $matches[1];
                     $bodyWithoutFrontmatter = str_replace($matches[0], '', $partContent);
-                    if (preg_match('/^title:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $m)) {
+                    // Parse YAML title safely even if the string contains escaped double quotes (\"...\")
+                    if (preg_match('/^title:\s*(.+)$/m', $frontmatterRaw, $m)) {
                         $extractedTitle = trim($m[1]);
+                        if ((str_starts_with($extractedTitle, '"') && str_ends_with($extractedTitle, '"')) ||
+                            (str_starts_with($extractedTitle, "'") && str_ends_with($extractedTitle, "'"))) {
+                            $extractedTitle = substr($extractedTitle, 1, -1);
+                        }
+                        $extractedTitle = trim(str_replace('\"', '"', $extractedTitle));
                         if ($extractedTitle !== '' && strcasecmp($extractedTitle, 'Untitled Chapter') !== 0 && strcasecmp($extractedTitle, 'Untitled') !== 0) {
                             $yamlTitle = $extractedTitle;
                         } elseif ($chapPartCount === 1) {
