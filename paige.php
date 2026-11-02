@@ -95,7 +95,7 @@ if (!is_dir(dirname($indexDestFile))) mkdir(dirname($indexDestFile), 0755, true)
  * @param array $excludeExtensions File extensions to keep (e.g., ['epub', 'pdf']).
  * @param array $excludeFiles Specific filenames to keep (e.g., ['.ebook_build_hash']).
  */
-function rrmdir($dir, $excludeExtensions = ['epub', 'pdf'], $excludeFiles = ['.ebook_build_hash']) {
+function rrmdir($dir, $excludeExtensions = ['epub', 'pdf', '7z'], $excludeFiles = ['.ebook_build_hash']) {
     if (is_dir($dir)) {
         $scanned = @scandir($dir);
         if ($scanned !== false) {
@@ -200,20 +200,23 @@ function formatEbookFileSize(int $bytes): string {
 function getSeriesEbookSizes(string $bookAssetDir, string $seriesSlug): array {
     clearstatcache();
     $files = [
-        'epub'      => $bookAssetDir . '/' . $seriesSlug . '.epub',
-        'pdf'       => $bookAssetDir . '/' . $seriesSlug . '.pdf',
-        'text_epub' => $bookAssetDir . '/' . $seriesSlug . '-text.epub',
-        'text_pdf'  => $bookAssetDir . '/' . $seriesSlug . '-text.pdf',
+        'epub'       => $bookAssetDir . '/' . $seriesSlug . '.epub',
+        'pdf'        => $bookAssetDir . '/' . $seriesSlug . '.pdf',
+        'text_epub'  => $bookAssetDir . '/' . $seriesSlug . '-text.epub',
+        'text_pdf'   => $bookAssetDir . '/' . $seriesSlug . '-text.pdf',
+        'package_7z' => $bookAssetDir . '/' . $seriesSlug . '-package.7z',
     ];
     $sizes = [
-        'epub'            => '',
-        'pdf'             => '',
-        'text_epub'       => '',
-        'text_pdf'        => '',
-        'epub_bytes'      => 0,
-        'pdf_bytes'       => 0,
-        'text_epub_bytes' => 0,
-        'text_pdf_bytes'  => 0,
+        'epub'             => '',
+        'pdf'              => '',
+        'text_epub'        => '',
+        'text_pdf'         => '',
+        'package_7z'       => '',
+        'epub_bytes'       => 0,
+        'pdf_bytes'        => 0,
+        'text_epub_bytes'  => 0,
+        'text_pdf_bytes'   => 0,
+        'package_7z_bytes' => 0,
     ];
     foreach ($files as $key => $filePath) {
         if (is_file($filePath)) {
@@ -225,6 +228,59 @@ function getSeriesEbookSizes(string $bookAssetDir, string $seriesSlug): array {
         }
     }
     return $sizes;
+}
+
+/**
+ * Resolves the cross-platform 7-Zip executable path (matching harper.sh's 01-init.sh
+ * discovery logic across Windows 7za.exe and macOS/Linux 7zz).
+ *
+ * @return string|null Absolute path or command name for 7-Zip, or null if unavailable.
+ */
+function resolveSevenZipBinary(): ?string {
+    $localToolsDir = __DIR__ . '/build-tools/7zip';
+    if (stripos(PHP_OS_FAMILY, 'Windows') !== false) {
+        $winBin = $localToolsDir . '/7za.exe';
+        if (is_file($winBin)) {
+            return $winBin;
+        }
+    } else {
+        $macBin = $localToolsDir . '/7zz';
+        if (is_file($macBin)) {
+            @chmod($macBin, 0755);
+            return $macBin;
+        }
+        $which = trim((string)@shell_exec('command -v 7zz 2>/dev/null'));
+        if ($which !== '') {
+            return $which;
+        }
+    }
+    return null;
+}
+
+/**
+ * Packages a compiled book asset directory (`toc.json`, `ovab.json`, `landing.md`,
+ * and all `e*` era/chapter/part Markdown folders) into `<slug>-package.7z` for
+ * instant one-shot offline downloading in the RaggieSoft Book Reader desktop & mobile apps.
+ *
+ * @param string $bookAssetDir Path to `raggiesoft-assets/raggiesoft-books/books/<slug>`.
+ * @param string $seriesSlug   Canonical series slug.
+ */
+function buildSeriesSevenZipPackage(string $bookAssetDir, string $seriesSlug): void {
+    $sevenZip = resolveSevenZipBinary();
+    if ($sevenZip === null || !is_dir($bookAssetDir)) {
+        return;
+    }
+
+    $archivePath = $bookAssetDir . '/' . $seriesSlug . '-package.7z';
+    @unlink($archivePath);
+
+    $cmd = sprintf(
+        'cd %s && %s a -t7z -mx=7 -ms=on %s . -xr!*.epub -xr!*.pdf -xr!*.7z -xr!.ebook_build_hash -xr!.DS_Store >/dev/null 2>&1',
+        escapeshellarg($bookAssetDir),
+        escapeshellarg($sevenZip),
+        escapeshellarg($seriesSlug . '-package.7z')
+    );
+    @exec($cmd);
 }
 
 // Find all top-level narrative directories
@@ -832,6 +888,16 @@ foreach ($narrativeDirs as $narrativeDir) {
         $tocDestFile = $assetDestDir . '/' . $seriesSlug . '/toc.json';
         file_put_contents($tocDestFile, json_encode($generatedToc, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         echo "  [Assets] Saved auto-discovered Table of Contents (with {$seriesIllustrationCount} illustrations & eBook sizes) to toc.json\n";
+
+        // Package the book's toc.json, ovab.json, landing.md, and e* Markdown tree into <slug>-package.7z
+        buildSeriesSevenZipPackage($seriesAssetDir, $seriesSlug);
+        $ebookSizes = getSeriesEbookSizes($seriesAssetDir, $seriesSlug);
+        $allEbookSizes[$seriesSlug] = $ebookSizes;
+        $generatedToc['ebook_sizes'] = $ebookSizes;
+        file_put_contents($tocDestFile, json_encode($generatedToc, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        $newRouteData['common']['ebook_sizes'] = $ebookSizes;
+        file_put_contents($newRouteJsonFile, json_encode($newRouteData, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        echo "  [7-Zip] Packaged offline desktop reader archive: {$seriesSlug}-package.7z ({$ebookSizes['package_7z']})\n";
     }
 
     // Populate the master catalog with entry details (separating quick-glance short_description from longer main description)
