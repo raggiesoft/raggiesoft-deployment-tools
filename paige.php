@@ -240,6 +240,24 @@ $masterCatalog = [];
 $searchIndex = [];
 // Lookup map of all series eBook file sizes for `raggiesoft.com/subdomains/books/data/ebook-sizes.json`
 $allEbookSizes = [];
+// Lookup map of all internal route preview cards for Wikipedia-style link hovercards (`data/link-previews.json`)
+$linkPreviewsManifestFile = $booksAppDir . '/data/link-previews.json';
+$allLinkPreviews = [];
+if ($requestedBookSlug !== null && is_file($linkPreviewsManifestFile)) {
+    $allLinkPreviews = json_decode((string)@file_get_contents($linkPreviewsManifestFile), true) ?: [];
+}
+$allLinkPreviews['/illustrations'] = [
+    'kind' => 'gallery',
+    'title' => 'Library-Wide Table of Illustrations',
+    'series' => 'Ocean View Archives',
+    'series_slug' => 'illustrations',
+    'kicker' => 'Ocean View Archives • Visual Index',
+    'date' => '',
+    'location' => 'All Illustrated Novels & Universes',
+    'image' => '/raggiesoft-books/images/covers/og/rachel.jpg',
+    'excerpt' => 'Explore every full-bleed 16:9 chapter plate and inline archival illustration across The Rachel Narrative, The Eleventh Child, The Stardust Engine, and the entire Ocean View Archives catalog.',
+    'url' => '/illustrations'
+];
 
 foreach ($narrativeDirs as $narrativeDir) {
     $narrativeName = basename($narrativeDir);
@@ -424,6 +442,7 @@ foreach ($narrativeDirs as $narrativeDir) {
                 $partRealmTime = '';
                 $partStartTime = '';
                 $partLocation = '';
+                $partSummary = '';
                 $partImages = [];
                 $partContent = file_get_contents($pFile);
                 $bodyWithoutFrontmatter = $partContent;
@@ -460,6 +479,9 @@ foreach ($narrativeDirs as $narrativeDir) {
                     }
                     if (preg_match('/^location:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mLoc)) {
                         $partLocation = trim($mLoc[1], " \t\n\r\0\x0B\"'");
+                    }
+                    if (preg_match('/^(?:og_description|summary):\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mSum)) {
+                        $partSummary = trim($mSum[1], " \t\n\r\0\x0B\"'");
                     }
 
                     // Parse frontmatter `image:` / `images:` and `image_alt:` / `image_alts:` (scalar or YAML list)
@@ -560,6 +582,10 @@ foreach ($narrativeDirs as $narrativeDir) {
                     "theme" => "raggiesoft-books",
                     "filePath" => $relPath
                 ];
+                if ($chapPartCount === 1 && strpos($partSlug, 'part-1-') !== 0) {
+                    $legacyPart1RouteUrl = "/raggiesoft-books/books/{$seriesSlug}/{$eraSlug}/{$chapSlug}/part-1-{$partSlug}";
+                    $routeData[$legacyPart1RouteUrl] = $routeData[$routeUrl];
+                }
                 $lastRouteUrl = $routeUrl; // Continually update to capture the very last part
 
                 $partImgCount = count($partImages);
@@ -567,18 +593,48 @@ foreach ($narrativeDirs as $narrativeDir) {
                 $eraIllustrationCount += $partImgCount;
                 $seriesIllustrationCount += $partImgCount;
 
+                // Clean the part body text and add to the full-text search index
+                $cleanBody = strip_tags($bodyWithoutFrontmatter);
+                $cleanBody = preg_replace('/[#_*\[\]>]/', '', $cleanBody);
+                $cleanBody = preg_replace('/\s+/', ' ', $cleanBody);
+                $cleanBody = trim($cleanBody);
+
+                // Extract a clean 1-2 sentence excerpt (~210 characters) for Wikipedia-style hovercard previews
+                $partExcerpt = $partSummary;
+                if ($partExcerpt === '') {
+                    $proseBody = preg_replace('/!\[[^\]]*\]\([^)]*\)/', '', $bodyWithoutFrontmatter);
+                    $proseBody = preg_replace('/\[([^\]]+)\]\([^)]*\)/', '$1', $proseBody);
+                    $proseBody = preg_replace('/^#+\s+.*$/m', '', $proseBody);
+                    $proseBody = preg_replace('/^---+\s*$/m', '', $proseBody);
+                    $proseBody = strip_tags($proseBody);
+                    $proseBody = preg_replace('/[*_`~>]/', '', $proseBody);
+                    $proseBody = trim(preg_replace('/\s+/', ' ', $proseBody));
+                    if (mb_strlen($proseBody) > 215) {
+                        $cut = mb_substr($proseBody, 0, 212);
+                        $lastSpace = mb_strrpos($cut, ' ');
+                        if ($lastSpace !== false && $lastSpace > 140) {
+                            $cut = mb_substr($cut, 0, $lastSpace);
+                        }
+                        $partExcerpt = rtrim($cut, " \t\n\r\0\x0B.,;:-—") . '…';
+                    } else {
+                        $partExcerpt = $proseBody;
+                    }
+                }
+
                 // Finalize TOC structure with parts and illustration manifest
+                $partStandaloneUrl = str_replace('/raggiesoft-books/books', '', $routeUrl);
                 $partEntry = [
                     'part_num' => $partNum,
                     'part_title' => $partTitle,
                     'file_path' => $relPath,
-                    'url' => str_replace('/raggiesoft-books/books', '', $routeUrl)
+                    'url' => $partStandaloneUrl
                 ];
                 if ($partDate !== '') $partEntry['date'] = $partDate;
                 if ($partStardate !== '') $partEntry['stardate'] = $partStardate;
                 if ($partRealmTime !== '') $partEntry['realm_time'] = $partRealmTime;
                 if ($partStartTime !== '') $partEntry['start_time'] = $partStartTime;
                 if ($partLocation !== '') $partEntry['location'] = $partLocation;
+                if ($partExcerpt !== '') $partEntry['excerpt'] = $partExcerpt;
                 if ($partImgCount > 0) {
                     $partEntry['image'] = $partImages[0]['src'];
                     $partEntry['image_alt'] = $partImages[0]['alt'];
@@ -587,11 +643,25 @@ foreach ($narrativeDirs as $narrativeDir) {
                 }
                 $tocChap['parts'][] = $partEntry;
 
-                // Clean the part body text and add to the full-text search index
-                $cleanBody = strip_tags($bodyWithoutFrontmatter);
-                $cleanBody = preg_replace('/[#_*\[\]>]/', '', $cleanBody);
-                $cleanBody = preg_replace('/\s+/', ' ', $cleanBody);
-                $cleanBody = trim($cleanBody);
+                $defaultSeriesOgImg = '/raggiesoft-books/images/covers/og/' . $seriesSlug . '.jpg';
+                $partPreviewImg = ($partImgCount > 0) ? $partImages[0]['src'] : $defaultSeriesOgImg;
+                $partTimeBadge = $partDate !== '' ? $partDate : ($partStardate !== '' ? "Stardate {$partStardate}" : ($partRealmTime !== '' ? $partRealmTime : ''));
+                $scenePreviewPayload = [
+                    'kind' => 'scene',
+                    'title' => $partTitle,
+                    'series' => $seriesTitle,
+                    'series_slug' => $seriesSlug,
+                    'kicker' => $seriesTitle . ' • ' . $chapTitle,
+                    'date' => $partTimeBadge,
+                    'location' => $partLocation,
+                    'image' => $partPreviewImg,
+                    'excerpt' => $partExcerpt,
+                    'url' => $partStandaloneUrl
+                ];
+                $allLinkPreviews[$partStandaloneUrl] = $scenePreviewPayload;
+                if ($chapPartCount === 1 && strpos($partSlug, 'part-1-') !== 0) {
+                    $allLinkPreviews["/{$seriesSlug}/{$eraSlug}/{$chapSlug}/part-1-{$partSlug}"] = $scenePreviewPayload;
+                }
 
                 $searchIndex[] = [
                     'series' => $seriesTitle,
@@ -604,10 +674,99 @@ foreach ($narrativeDirs as $narrativeDir) {
             }
             $tocChap['illustration_count'] = $chapIllustrationCount;
             $tocEra['chapters'][] = $tocChap;
+
+            // Register chapter-level preview card (inheriting first part's image & excerpt)
+            $chapStandaloneUrl = str_replace('/raggiesoft-books/books', '', $chapRouteUrl);
+            $firstChapPart = $tocChap['parts'][0] ?? null;
+            $chapPreviewImg = '/raggiesoft-books/images/covers/og/' . $seriesSlug . '.jpg';
+            foreach ($tocChap['parts'] as $cp) {
+                if (!empty($cp['image'])) {
+                    $chapPreviewImg = $cp['image'];
+                    break;
+                }
+            }
+            $allLinkPreviews[$chapStandaloneUrl] = [
+                'kind' => 'chapter',
+                'title' => $chapTitle,
+                'series' => $seriesTitle,
+                'series_slug' => $seriesSlug,
+                'kicker' => $seriesTitle . ' • ' . $eraTitle,
+                'date' => $firstChapPart['date'] ?? ($firstChapPart['stardate'] ?? ($firstChapPart['realm_time'] ?? '')),
+                'location' => $firstChapPart['location'] ?? '',
+                'image' => $chapPreviewImg,
+                'excerpt' => $firstChapPart['excerpt'] ?? ($seriesMeta['series_short_description'] ?? ''),
+                'url' => $chapStandaloneUrl
+            ];
         }
         $tocEra['illustration_count'] = $eraIllustrationCount;
         $tocBooks[] = $tocEra;
+
+        // Register era-level preview card
+        $eraStandaloneUrl = str_replace('/raggiesoft-books/books', '', $eraRouteUrl);
+        $firstEraChap = $tocEra['chapters'][0] ?? null;
+        $firstEraPart = $firstEraChap['parts'][0] ?? null;
+        $eraPreviewImg = '/raggiesoft-books/images/covers/og/' . $seriesSlug . '.jpg';
+        foreach ($tocEra['chapters'] as $ec) {
+            foreach ($ec['parts'] as $ep) {
+                if (!empty($ep['image'])) {
+                    $eraPreviewImg = $ep['image'];
+                    break 2;
+                }
+            }
+        }
+        $allLinkPreviews[$eraStandaloneUrl] = [
+            'kind' => 'era',
+            'title' => $eraTitle,
+            'series' => $seriesTitle,
+            'series_slug' => $seriesSlug,
+            'kicker' => $seriesTitle . ' • Narrative Era',
+            'date' => $firstEraPart['date'] ?? '',
+            'location' => count($tocEra['chapters']) . ' ' . (count($tocEra['chapters']) === 1 ? 'Chapter' : 'Chapters'),
+            'image' => $eraPreviewImg,
+            'excerpt' => $firstEraPart['excerpt'] ?? ($seriesMeta['series_short_description'] ?? ''),
+            'url' => $eraStandaloneUrl
+        ];
     }
+
+    // Register book-level, TOC, and Illustrations preview cards
+    $seriesDescText = $seriesMeta['series_short_description'] ?? ($seriesMeta['series_description'] ?? '');
+    $seriesOgCover = '/raggiesoft-books/images/covers/og/' . $seriesSlug . '.jpg';
+    $allLinkPreviews['/' . $seriesSlug] = [
+        'kind' => 'book',
+        'title' => $seriesTitle,
+        'series' => $seriesTitle,
+        'series_slug' => $seriesSlug,
+        'kicker' => 'Ocean View Archives Novel',
+        'date' => count($tocBooks) . ' ' . (count($tocBooks) === 1 ? 'Era' : 'Eras'),
+        'location' => $seriesIllustrationCount > 0 ? "{$seriesIllustrationCount} Illustrations" : 'Full-Length Archive',
+        'image' => $seriesOgCover,
+        'excerpt' => $seriesDescText,
+        'url' => '/' . $seriesSlug
+    ];
+    $allLinkPreviews['/' . $seriesSlug . '/toc'] = [
+        'kind' => 'book',
+        'title' => "Table of Contents — {$seriesTitle}",
+        'series' => $seriesTitle,
+        'series_slug' => $seriesSlug,
+        'kicker' => $seriesTitle . ' • Index',
+        'date' => count($tocBooks) . ' ' . (count($tocBooks) === 1 ? 'Era' : 'Eras'),
+        'location' => 'Complete Chapter Directory',
+        'image' => $seriesOgCover,
+        'excerpt' => $seriesDescText,
+        'url' => '/' . $seriesSlug . '/toc'
+    ];
+    $allLinkPreviews['/' . $seriesSlug . '/illustrations'] = [
+        'kind' => 'gallery',
+        'title' => "Table of Illustrations — {$seriesTitle}",
+        'series' => $seriesTitle,
+        'series_slug' => $seriesSlug,
+        'kicker' => $seriesTitle . ' • Visual Gallery',
+        'date' => "{$seriesIllustrationCount} Illustrations",
+        'location' => '16:9 Chapter Plates & Scene Artwork',
+        'image' => $seriesOgCover,
+        'excerpt' => "Browse all {$seriesIllustrationCount} canonical illustrations for {$seriesTitle} in chronological order.",
+        'url' => '/' . $seriesSlug . '/illustrations'
+    ];
 
     // Append sequence chaining links to the absolute last route in the narrative
     if (!empty($seriesMeta['next_series_url']) && isset($lastRouteUrl)) {
@@ -699,6 +858,15 @@ echo "\n  [Catalog] Master Catalog saved to: {$catalogFile}\n";
 $ebookSizesManifestFile = $booksAppDir . '/data/ebook-sizes.json';
 file_put_contents($ebookSizesManifestFile, json_encode($allEbookSizes, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 echo "  [Sizes] eBook file sizes manifest saved to: {$ebookSizesManifestFile}\n";
+
+// Write the Wikipedia-style link preview hovercard manifest for books.raggiesoft.com and CDN
+$linkPreviewsJson = json_encode($allLinkPreviews, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+file_put_contents($linkPreviewsManifestFile, $linkPreviewsJson);
+$cdnLinkPreviewsFile = $assetDestDir . '/../json/link-previews.json';
+if (is_dir(dirname($cdnLinkPreviewsFile))) {
+    file_put_contents($cdnLinkPreviewsFile, $linkPreviewsJson);
+}
+echo "  [Previews] Wikipedia-style link preview index (" . count($allLinkPreviews) . " routes) saved to: {$linkPreviewsManifestFile}\n";
 
 // Write the full-text search index file
 file_put_contents($indexDestFile, json_encode($searchIndex, JSON_UNESCAPED_SLASHES));
