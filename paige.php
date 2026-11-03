@@ -925,6 +925,219 @@ $ebookSizesManifestFile = $booksAppDir . '/data/ebook-sizes.json';
 file_put_contents($ebookSizesManifestFile, json_encode($allEbookSizes, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 echo "  [Sizes] eBook file sizes manifest saved to: {$ebookSizesManifestFile}\n";
 
+// --- STEP B: COMPILE THE LISTENING ROOM (music.raggiesoft.com) HOVERCARD PREVIEWS ---
+// Populate $allLinkPreviews with rich artist, album, track, and playlist entries from
+// `raggiesoft-assets/engine-room-records/catalog.json` so `sophia/oliver.php` can render
+// accurate album artwork (`social-preview.jpg` / `album-art.jpg`), clean track titles,
+// track numbers, durations, and studio liner notes without relying on local disk checks
+// on the production droplet.
+$errCatalogFile = $serverRoot . '/raggiesoft-assets/engine-room-records/catalog.json';
+if (is_file($errCatalogFile)) {
+    $errCatalog = json_decode((string)@file_get_contents($errCatalogFile), true) ?: [];
+    $artistRollup = [];
+    $truncateMusicExcerpt = static function (string $rawText, int $maxLen = 215): string {
+        $clean = strip_tags($rawText);
+        $clean = preg_replace('/\[([^\]]+)\]\([^)]*\)/', '$1', $clean);
+        $clean = preg_replace('/^#+\s*/m', '', $clean);
+        $clean = preg_replace('/[*_`~>]/', '', $clean);
+        $clean = trim(preg_replace('/\s+/', ' ', $clean));
+        if (mb_strlen($clean) > $maxLen) {
+            $cut = mb_substr($clean, 0, $maxLen - 3);
+            $lastSpace = mb_strrpos($cut, ' ');
+            if ($lastSpace !== false && $lastSpace > 130) {
+                $cut = mb_substr($cut, 0, $lastSpace);
+            }
+            return rtrim($cut, " \t\n\r\0\x0B.,;:-—") . '…';
+        }
+        return $clean;
+    };
+
+    foreach ($errCatalog as $albumEntry) {
+        $artistSlug = trim((string)($albumEntry['artistSlug'] ?? ''));
+        $albumSlug  = trim((string)($albumEntry['slug'] ?? ''));
+        if ($artistSlug === '' || $albumSlug === '') {
+            continue;
+        }
+        $artistName = trim((string)($albumEntry['artist'] ?? ucwords(str_replace('-', ' ', $artistSlug))));
+        $albumTitle = trim((string)($albumEntry['title'] ?? ucwords(str_replace('-', ' ', $albumSlug))));
+        $albumYear  = trim((string)($albumEntry['year'] ?? ''));
+        $albumTypeLabel = trim((string)($albumEntry['albumTypeLabel'] ?? 'Album'));
+        $tracksList = is_array($albumEntry['tracks'] ?? null) ? $albumEntry['tracks'] : [];
+        $trackCount = (int)($albumEntry['totalTracksCount'] ?? count($tracksList));
+
+        // Prefer album social-preview.jpg if present in raggiesoft-assets, else album-art.jpg
+        $relAlbumSocial = "/engine-room-records/artists/{$artistSlug}/{$albumSlug}/social-preview.jpg";
+        $relAlbumCover  = "/engine-room-records/artists/{$artistSlug}/{$albumSlug}/album-art.jpg";
+        $albumPreviewImg = is_file($serverRoot . '/raggiesoft-assets' . $relAlbumSocial)
+            ? $relAlbumSocial
+            : $relAlbumCover;
+
+        // Track artist-level statistics for `music://{artistSlug}`
+        if (!isset($artistRollup[$artistSlug])) {
+            $relArtistSocial = "/engine-room-records/artists/{$artistSlug}/social-preview.jpg";
+            $artistRollup[$artistSlug] = [
+                'name' => $artistName,
+                'albums' => 0,
+                'tracks' => 0,
+                'image' => is_file($serverRoot . '/raggiesoft-assets' . $relArtistSocial) ? $relArtistSocial : $albumPreviewImg
+            ];
+        }
+        $artistRollup[$artistSlug]['albums']++;
+        $artistRollup[$artistSlug]['tracks'] += $trackCount;
+
+        $albumDesc = $truncateMusicExcerpt((string)($albumEntry['description'] ?? ''));
+        if ($albumDesc === '') {
+            $albumDesc = "Stream {$albumTitle} by {$artistName} in The Listening Room with synchronized lyrics, studio liner notes, and lossless master playback.";
+        }
+
+        // Register album-level preview card
+        $allLinkPreviews["music://{$artistSlug}/{$albumSlug}"] = [
+            'kind' => 'music',
+            'kicker' => 'The Listening Room • ' . $artistName,
+            'title' => $albumTitle,
+            'date' => $albumYear !== '' ? "Released {$albumYear}" : 'Engine Room Records',
+            'location' => "{$albumTypeLabel} • {$trackCount} " . ($trackCount === 1 ? 'Track' : 'Tracks'),
+            'image' => $albumPreviewImg,
+            'excerpt' => $albumDesc,
+            'url' => "https://music.raggiesoft.com/{$artistSlug}/{$albumSlug}"
+        ];
+
+        // Register track-level preview cards
+        foreach ($tracksList as $tIdx => $trackItem) {
+            $fileName = trim((string)($trackItem['fileName'] ?? ''));
+            if ($fileName === '') {
+                continue;
+            }
+            $trackTitle = trim((string)($trackItem['title'] ?? ''));
+            if ($trackTitle === '') {
+                $trackTitle = ucwords(str_replace('-', ' ', preg_replace('/^\d+-\d+-/', '', $fileName)));
+            }
+            $version = trim((string)($trackItem['version'] ?? ''));
+            if ($version !== '' && stripos($trackTitle, $version) === false) {
+                $trackTitle .= " ({$version})";
+            }
+            $trackNum = (int)($trackItem['track'] ?? ($tIdx + 1));
+            $discNum  = (int)($trackItem['disc'] ?? 1);
+            $duration = trim((string)($trackItem['duration'] ?? ''));
+            $trackLocParts = [$albumTitle];
+            if ($discNum > 1) {
+                $trackLocParts[] = "Disc {$discNum}, Track {$trackNum}";
+            } else {
+                $trackLocParts[] = "Track {$trackNum}";
+            }
+            $trackLocation = implode(' • ', $trackLocParts) . ($duration !== '' ? " ({$duration})" : '');
+
+            $trackLore = $truncateMusicExcerpt((string)($trackItem['loreNote'] ?? ''));
+            if ($trackLore === '') {
+                $trackLore = $albumDesc;
+            }
+
+            $allLinkPreviews["music://{$artistSlug}/{$albumSlug}?track={$fileName}"] = [
+                'kind' => 'music',
+                'kicker' => 'The Listening Room • ' . $artistName,
+                'title' => $trackTitle,
+                'date' => $albumYear !== '' ? "Released {$albumYear}" : 'Engine Room Records',
+                'location' => $trackLocation,
+                'image' => $albumPreviewImg,
+                'excerpt' => $trackLore,
+                'url' => "https://music.raggiesoft.com/{$artistSlug}/{$albumSlug}?track={$fileName}"
+            ];
+        }
+    }
+
+    // Also scan any artist/album folders in `raggiesoft-assets/engine-room-records/artists/`
+    // that have `album.json` / `tracks.json` so every album/track on disk is indexed.
+    $artistFolders = glob($serverRoot . '/raggiesoft-assets/engine-room-records/artists/*', GLOB_ONLYDIR) ?: [];
+    foreach ($artistFolders as $artistFolder) {
+        $artistSlug = basename($artistFolder);
+        $albumFolders = glob($artistFolder . '/*', GLOB_ONLYDIR) ?: [];
+        foreach ($albumFolders as $albumFolder) {
+            $albumSlug = basename($albumFolder);
+            $albumKey = "music://{$artistSlug}/{$albumSlug}";
+            $relAlbumSocial = "/engine-room-records/artists/{$artistSlug}/{$albumSlug}/social-preview.jpg";
+            $relAlbumCover  = "/engine-room-records/artists/{$artistSlug}/{$albumSlug}/album-art.jpg";
+            $albumPreviewImg = is_file($serverRoot . '/raggiesoft-assets' . $relAlbumSocial)
+                ? $relAlbumSocial
+                : $relAlbumCover;
+
+            $albumMeta = is_file($albumFolder . '/album.json')
+                ? (json_decode((string)@file_get_contents($albumFolder . '/album.json'), true) ?: [])
+                : [];
+            $tracksMeta = is_file($albumFolder . '/tracks.json')
+                ? (json_decode((string)@file_get_contents($albumFolder . '/tracks.json'), true) ?: [])
+                : [];
+            $tracksList = is_array($tracksMeta['tracks'] ?? null) ? $tracksMeta['tracks'] : [];
+
+            $artistName = trim((string)($albumMeta['artist'] ?? ($artistRollup[$artistSlug]['name'] ?? ucwords(str_replace('-', ' ', $artistSlug)))));
+            $albumTitle = trim((string)($albumMeta['title'] ?? ucwords(str_replace('-', ' ', preg_replace('/^\d{4}-/', '', $albumSlug)))));
+            $albumYear = '';
+            if (preg_match('/^(\d{4})/', (string)($albumMeta['releaseDate'] ?? $albumSlug), $ym)) {
+                $albumYear = $ym[1];
+            }
+            $albumDesc = $truncateMusicExcerpt((string)($albumMeta['description'] ?? ''));
+            if ($albumDesc === '') {
+                $albumDesc = "Stream {$albumTitle} by {$artistName} in The Listening Room with synchronized lyrics, studio liner notes, and lossless master playback.";
+            }
+
+            if (!isset($allLinkPreviews[$albumKey])) {
+                $tCount = count($tracksList);
+                $allLinkPreviews[$albumKey] = [
+                    'kind' => 'music',
+                    'kicker' => 'The Listening Room • ' . $artistName,
+                    'title' => $albumTitle,
+                    'date' => $albumYear !== '' ? "Released {$albumYear}" : 'Engine Room Records',
+                    'location' => $tCount > 0 ? "{$tCount} Tracks" : 'Album Archive',
+                    'image' => $albumPreviewImg,
+                    'excerpt' => $albumDesc,
+                    'url' => "https://music.raggiesoft.com/{$artistSlug}/{$albumSlug}"
+                ];
+            }
+
+            foreach ($tracksList as $tIdx => $trackItem) {
+                $fileName = trim((string)($trackItem['fileName'] ?? ''));
+                if ($fileName === '') continue;
+                $trackKey = "music://{$artistSlug}/{$albumSlug}?track={$fileName}";
+                if (isset($allLinkPreviews[$trackKey])) continue;
+
+                $trackTitle = trim((string)($trackItem['title'] ?? ''));
+                if ($trackTitle === '') {
+                    $trackTitle = ucwords(str_replace('-', ' ', preg_replace('/^\d+-\d+-/', '', $fileName)));
+                }
+                $trackNum = (int)($trackItem['track'] ?? ($tIdx + 1));
+                $discNum  = (int)($trackItem['disc'] ?? 1);
+                $duration = trim((string)($trackItem['duration'] ?? ''));
+                $trackLoc = $albumTitle . ' • ' . ($discNum > 1 ? "Disc {$discNum}, Track {$trackNum}" : "Track {$trackNum}") . ($duration !== '' ? " ({$duration})" : '');
+                $trackLore = $truncateMusicExcerpt((string)($trackItem['loreNote'] ?? ''));
+                if ($trackLore === '') $trackLore = $albumDesc;
+
+                $allLinkPreviews[$trackKey] = [
+                    'kind' => 'music',
+                    'kicker' => 'The Listening Room • ' . $artistName,
+                    'title' => $trackTitle,
+                    'date' => $albumYear !== '' ? "Released {$albumYear}" : 'Engine Room Records',
+                    'location' => $trackLoc,
+                    'image' => $albumPreviewImg,
+                    'excerpt' => $trackLore,
+                    'url' => "https://music.raggiesoft.com/{$artistSlug}/{$albumSlug}?track={$fileName}"
+                ];
+            }
+        }
+    }
+
+    foreach ($artistRollup as $artistSlug => $info) {
+        $allLinkPreviews["music://{$artistSlug}"] = [
+            'kind' => 'music',
+            'kicker' => 'The Listening Room • Artist Discography',
+            'title' => $info['name'],
+            'date' => 'Engine Room Records',
+            'location' => "{$info['albums']} " . ($info['albums'] === 1 ? 'Album' : 'Albums') . " • {$info['tracks']} Tracks",
+            'image' => $info['image'],
+            'excerpt' => "Stream {$info['name']}'s complete studio and live discography in The Listening Room with synchronized lyrics, studio liner notes, and lossless master playback.",
+            'url' => "https://music.raggiesoft.com/{$artistSlug}"
+        ];
+    }
+}
+
 // Write the Wikipedia-style link preview hovercard manifest for books.raggiesoft.com and CDN
 $linkPreviewsJson = json_encode($allLinkPreviews, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 file_put_contents($linkPreviewsManifestFile, $linkPreviewsJson);
