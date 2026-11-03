@@ -283,6 +283,263 @@ function buildSeriesSevenZipPackage(string $bookAssetDir, string $seriesSlug): v
     @exec($cmd);
 }
 
+/**
+ * Counts readable prose words in a Markdown string after stripping YAML frontmatter,
+ * Markdown image tags, link URLs, HTML tags, and structural symbols.
+ *
+ * @param string $markdownText     Raw Markdown or plain text.
+ * @param bool   $stripFrontmatter Whether to remove a leading `--- ... ---` block.
+ * @return int Exact readable word count.
+ */
+function countReadableProseWords(string $markdownText, bool $stripFrontmatter = true): int {
+    $text = $markdownText;
+    if ($stripFrontmatter) {
+        $text = (string)preg_replace('/^\s*---\s*\R.*?\R---\s*\R?/su', ' ', $text, 1);
+    }
+    // Strip Markdown images ![alt](url)
+    $text = (string)preg_replace('/!\[[^\]]*\]\([^)]*\)/u', ' ', $text);
+    // Replace Markdown links [label](url) with their visible label
+    $text = (string)preg_replace('/\[([^\]]+)\]\([^)]*\)/u', '$1', $text);
+    // Strip HTML tags and Markdown formatting characters
+    $text = strip_tags($text);
+    $text = (string)preg_replace('/[#*_`~>|]/u', ' ', $text);
+    if (preg_match_all('/\b[\p{L}\p{N}\'’-]+\b/u', $text, $matches)) {
+        return count($matches[0]);
+    }
+    return 0;
+}
+
+/**
+ * Counts readable words inside a `.docx` OpenXML document archive (`word/document.xml`).
+ *
+ * @param string $docxPath Absolute path to the `.docx` file.
+ * @return int Readable word count.
+ */
+function countDocxWords(string $docxPath): int {
+    if (!class_exists('ZipArchive') || !is_file($docxPath)) {
+        return 0;
+    }
+    $zip = new ZipArchive();
+    if ($zip->open($docxPath) !== true) {
+        return 0;
+    }
+    $xml = $zip->getFromName('word/document.xml');
+    $zip->close();
+    if (!is_string($xml) || $xml === '') {
+        return 0;
+    }
+    $plain = strip_tags(str_replace('<', ' <', $xml));
+    if (preg_match_all('/\b[\p{L}\p{N}\'’-]+\b/u', $plain, $matches)) {
+        return count($matches[0]);
+    }
+    return 0;
+}
+
+/**
+ * Recursively computes the deduplicated, curated canonical lore word count inside a
+ * narrative lore folder (excluding legacy `_old/`, `ai-dump/`, raw AI chat transcripts,
+ * and monolithic backup files when structured `chunks/` exist).
+ *
+ * @param string $folderPath Absolute path to a lore directory.
+ * @return int Curated canonical lore word count.
+ */
+function computeCuratedLoreFolderWords(string $folderPath): int {
+    if (!is_dir($folderPath)) {
+        return 0;
+    }
+    $totalWords = 0;
+    $seenHashes = [];
+    $seenStems  = [];
+    $hasChunksSubdir = is_dir($folderPath . '/chunks');
+
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($folderPath, FilesystemIterator::SKIP_DOTS)
+    );
+
+    $mdTxtFiles = [];
+    $docxFiles  = [];
+    foreach ($iterator as $fileInfo) {
+        if (!$fileInfo->isFile()) {
+            continue;
+        }
+        $fullPath = $fileInfo->getPathname();
+        $relPath  = str_replace('\\', '/', substr($fullPath, strlen($folderPath) + 1));
+        $segments = explode('/', $relPath);
+        if (in_array('_old', $segments, true) || in_array('ai-dump', $segments, true)) {
+            continue;
+        }
+        $fn  = $fileInfo->getFilename();
+        $low = strtolower($fn);
+        $ext = strtolower($fileInfo->getExtension());
+        if (str_starts_with($fn, '~$')) {
+            continue;
+        }
+        if (
+            str_contains($low, 'gemini-') ||
+            str_contains($low, 'ai conversation') ||
+            str_contains($low, 'lore-backup') ||
+            in_array($low, ['cassandra-rescue.md', 'cassandra-the-ceo.md', 'shiloh-family.md'], true) ||
+            ($low === 'rachel-lore.md' && $hasChunksSubdir)
+        ) {
+            continue;
+        }
+        if ($ext === 'md' || $ext === 'txt') {
+            $mdTxtFiles[] = $fullPath;
+        } elseif ($ext === 'docx') {
+            $docxFiles[] = $fullPath;
+        }
+    }
+
+    sort($mdTxtFiles);
+    foreach ($mdTxtFiles as $fullPath) {
+        $raw = (string)@file_get_contents($fullPath);
+        $hash = hash('sha256', $raw);
+        if (isset($seenHashes[$hash])) {
+            continue;
+        }
+        $seenHashes[$hash] = true;
+        $stem = preg_replace('/\.[^.]+$/', '', $fullPath);
+        $seenStems[$stem] = true;
+        $totalWords += countReadableProseWords($raw, true);
+    }
+
+    sort($docxFiles);
+    foreach ($docxFiles as $fullPath) {
+        $stem = preg_replace('/\.[^.]+$/', '', $fullPath);
+        if (isset($seenStems[$stem])) {
+            continue;
+        }
+        $hash = (string)@hash_file('sha256', $fullPath);
+        if ($hash !== '' && isset($seenHashes[$hash])) {
+            continue;
+        }
+        if ($hash !== '') {
+            $seenHashes[$hash] = true;
+        }
+        $totalWords += countDocxWords($fullPath);
+    }
+
+    return $totalWords;
+}
+
+/**
+ * Classifies a novel's word count against standard, generic contemporary publishing
+ * industry benchmarks (strictly zero third-party author names or external book titles).
+ *
+ * @param int $storyWords    Pure narrative prose word count.
+ * @param int $combinedWords Story + curated lore word count.
+ * @return array{category:string,badge:string,benchmark_note:string,novel_equivalent:float}
+ */
+function classifyPublishingScale(int $storyWords, int $combinedWords): array {
+    $ratio = round($storyWords / 90000, 1);
+    if ($storyWords >= 200000) {
+        $volCount = max(2, (int)round($storyWords / 90000));
+        return [
+            'category'         => 'Multi-Volume Epic Omnibus',
+            'badge'            => 'Multi-Volume Omnibus',
+            'benchmark_note'   => sprintf('%.1f× a standard 90,000-word contemporary novel (~%d-volume print series)', $ratio, $volCount),
+            'novel_equivalent' => $ratio,
+        ];
+    }
+    if ($storyWords >= 110000) {
+        return [
+            'category'         => 'Epic Full-Length Novel',
+            'badge'            => 'Epic Novel',
+            'benchmark_note'   => sprintf('%.1f× a standard 90,000-word contemporary novel (Epic 110k–200k tier)', $ratio),
+            'novel_equivalent' => $ratio,
+        ];
+    }
+    if ($storyWords >= 70000) {
+        return [
+            'category'         => 'Full-Length Contemporary Novel',
+            'badge'            => 'Full-Length Novel',
+            'benchmark_note'   => sprintf('%.1f× a standard 90,000-word contemporary novel (70k–110k trade benchmark)', $ratio),
+            'novel_equivalent' => $ratio,
+        ];
+    }
+    if ($storyWords >= 40000) {
+        return [
+            'category'         => 'Compact Novel',
+            'badge'            => 'Compact Novel',
+            'benchmark_note'   => 'Compact single-volume trade paperback length (40,000–70,000 words)',
+            'novel_equivalent' => $ratio,
+        ];
+    }
+    if ($storyWords >= 17500) {
+        return [
+            'category'         => 'Novella',
+            'badge'            => 'Novella',
+            'benchmark_note'   => 'Standard contemporary novella length (17,500–40,000 words)',
+            'novel_equivalent' => $ratio,
+        ];
+    }
+    if ($storyWords > 0) {
+        return [
+            'category'         => 'Short Fiction & Novelette',
+            'badge'            => 'Short Fiction',
+            'benchmark_note'   => 'Short story / novelette companion (< 17,500 words)',
+            'novel_equivalent' => round($storyWords / 90000, 2),
+        ];
+    }
+    return [
+        'category'         => 'Lore & Outline Archive',
+        'badge'            => 'Lore & Outline',
+        'benchmark_note'   => 'In-development series outline & canonical lore treatment',
+        'novel_equivalent' => 0.0,
+    ];
+}
+
+// Preload Engine Room Records album & track liner notes + lyrics word counts for cross-referenced novels
+$errArtistLinerWords  = [];
+$errArtistLyricsWords = [];
+$errPreloadCatalogFile = $serverRoot . '/raggiesoft-assets/engine-room-records/catalog.json';
+if (is_file($errPreloadCatalogFile)) {
+    $errPreloadCatalog = json_decode((string)@file_get_contents($errPreloadCatalogFile), true) ?: [];
+    foreach ($errPreloadCatalog as $errAlb) {
+        $aSlug = trim((string)($errAlb['artistSlug'] ?? ''));
+        if ($aSlug === '') {
+            continue;
+        }
+        $linerWords = countReadableProseWords((string)($errAlb['description'] ?? ''), false);
+        $lyricsWords = 0;
+        foreach (($errAlb['tracks'] ?? []) as $errTrack) {
+            $linerWords  += countReadableProseWords((string)($errTrack['loreNote'] ?? ''), false);
+            $lyricsWords += countReadableProseWords((string)($errTrack['lyrics'] ?? ''), false);
+        }
+        $errArtistLinerWords[$aSlug]  = ($errArtistLinerWords[$aSlug] ?? 0) + $linerWords;
+        $errArtistLyricsWords[$aSlug] = ($errArtistLyricsWords[$aSlug] ?? 0) + $lyricsWords;
+    }
+}
+
+$bookLoreFolderMap = [
+    'rachel'                    => ['lore/rachel'],
+    'aubrie'                    => ['lore/aubrie', 'backstage/books/aubrie'],
+    'luna-leo'                  => ['lore/luna-leo'],
+    'alex-chloe'                => ['lore/astro-kids'],
+    'paige'                     => ['lore/paige'],
+    'nichole'                   => ['lore/nichole'],
+    'quantum-directive-3-casey' => ['lore/casey'],
+    'ruby-mountain'             => ['lore/ruby-mountain'],
+    'stardust-engine'           => ['backstage/music'],
+    'ashley-tower'              => ['lore/ashley-tower'],
+    'ad-astra'                  => ['lore/ad-astra'],
+    'drew'                      => ['lore/drew'],
+    'nate'                      => ['lore/nate'],
+    'samantha'                  => ['lore/samantha'],
+    'crimson-node'              => ['lore/crimson-node', 'lore/shiloh'],
+    'meredith'                  => ['lore/david-meredith'],
+    'beth'                      => ['lore/beth'],
+    'fractured-prisms'          => ['lore/fractured-prisms'],
+    'water-planet'              => ['lore/water-planet'],
+];
+$bookMusicArtistMap = [
+    'stardust-engine'  => 'the-stardust-engine',
+    'crimson-node'     => 'crimson-node',
+    'fractured-prisms' => 'fractured-prisms',
+    'aethel'           => 'firelight',
+];
+$narrativesRootDir = dirname($sourceBooksDir);
+
 // Find all top-level narrative directories
 $narrativeDirs = array_filter(glob($sourceBooksDir . '/*'), 'is_dir');
 if (empty($narrativeDirs)) {
@@ -408,6 +665,10 @@ foreach ($narrativeDirs as $narrativeDir) {
 
     $tocBooks = [];
     $seriesIllustrationCount = 0;
+    $seriesStoryWordCount = 0;
+    $seriesChapCountTotal = 0;
+    $seriesPartCountTotal = 0;
+    $seriesPartAbsPaths   = [];
 
     // Auto-discover Era directories strictly based on 'e*' naming convention
     $bDirs = glob($narrativeDir . '/e*', GLOB_ONLYDIR);
@@ -438,11 +699,13 @@ foreach ($narrativeDirs as $narrativeDir) {
 
         // Track structure for the auto-generated TOC
         $eraIllustrationCount = 0;
+        $eraWordCount = 0;
         $tocEra = [
             'era_num' => $eraNum,
             'era_title' => $eraTitle,
             'era_url' => $eraRouteUrl,
             'illustration_count' => 0,
+            'word_count' => 0,
             'chapters' => []
         ];
 
@@ -451,6 +714,7 @@ foreach ($narrativeDirs as $narrativeDir) {
         sort($cDirs);
 
         foreach ($cDirs as $cIndex => $cDir) {
+            $seriesChapCountTotal++;
             $cName = basename($cDir);
             $chapNum = intval(str_replace('c', '', $cName));
 
@@ -475,11 +739,13 @@ foreach ($narrativeDirs as $narrativeDir) {
 
             // Track structure for auto-generated TOC (`parts` array inside each chapter)
             $chapIllustrationCount = 0;
+            $chapWordCount = 0;
             $tocChap = [
                 'chap_num' => $chapNum,
                 'chap_title' => $chapTitle,
                 'chap_url' => $chapRouteUrl,
                 'illustration_count' => 0,
+                'word_count' => 0,
                 'parts' => []
             ];
 
@@ -677,13 +943,26 @@ foreach ($narrativeDirs as $narrativeDir) {
                     }
                 }
 
-                // Finalize TOC structure with parts and illustration manifest
+                // Finalize TOC structure with parts, word count telemetry, and illustration manifest
+                $seriesPartCountTotal++;
+                $realPFile = realpath($pFile);
+                if ($realPFile !== false) {
+                    $seriesPartAbsPaths[$realPFile] = true;
+                }
+                $partWordCount = countReadableProseWords($bodyWithoutFrontmatter, false);
+                $partReadingMinutes = max(1, (int)ceil($partWordCount / 250));
+                $chapWordCount += $partWordCount;
+                $eraWordCount += $partWordCount;
+                $seriesStoryWordCount += $partWordCount;
+
                 $partStandaloneUrl = str_replace('/raggiesoft-books/books', '', $routeUrl);
                 $partEntry = [
                     'part_num' => $partNum,
                     'part_title' => $partTitle,
                     'file_path' => $relPath,
-                    'url' => $partStandaloneUrl
+                    'url' => $partStandaloneUrl,
+                    'word_count' => $partWordCount,
+                    'reading_minutes' => $partReadingMinutes
                 ];
                 if ($partDate !== '') $partEntry['date'] = $partDate;
                 if ($partStardate !== '') $partEntry['stardate'] = $partStardate;
@@ -729,6 +1008,7 @@ foreach ($narrativeDirs as $narrativeDir) {
                 ];
             }
             $tocChap['illustration_count'] = $chapIllustrationCount;
+            $tocChap['word_count'] = $chapWordCount;
             $tocEra['chapters'][] = $tocChap;
 
             // Register chapter-level preview card (inheriting first part's image & excerpt)
@@ -755,6 +1035,7 @@ foreach ($narrativeDirs as $narrativeDir) {
             ];
         }
         $tocEra['illustration_count'] = $eraIllustrationCount;
+        $tocEra['word_count'] = $eraWordCount;
         $tocBooks[] = $tocEra;
 
         // Register era-level preview card
@@ -837,6 +1118,61 @@ foreach ($narrativeDirs as $narrativeDir) {
     $ebookSizes = getSeriesEbookSizes($seriesAssetDir, $seriesSlug);
     $allEbookSizes[$seriesSlug] = $ebookSizes;
 
+    // --- COMPUTE SERIES LORE & COMBINED WORD COUNT TELEMETRY ---
+    $seriesInternalLoreWords = 0;
+    foreach (['series_short_description', 'series_description'] as $descKey) {
+        if (!empty($seriesMeta[$descKey])) {
+            $seriesInternalLoreWords += countReadableProseWords((string)$seriesMeta[$descKey], false);
+        }
+    }
+    $bookDirIter = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($narrativeDir, FilesystemIterator::SKIP_DOTS)
+    );
+    foreach ($bookDirIter as $bFileInfo) {
+        if ($bFileInfo->isFile() && strtolower($bFileInfo->getExtension()) === 'md') {
+            $absMdPath = $bFileInfo->getRealPath();
+            if ($absMdPath !== false && !isset($seriesPartAbsPaths[$absMdPath])) {
+                $seriesInternalLoreWords += countReadableProseWords((string)@file_get_contents($absMdPath), true);
+            }
+        }
+    }
+
+    $seriesExternalLoreWords = 0;
+    foreach (($bookLoreFolderMap[$seriesSlug] ?? []) as $relLoreFolder) {
+        $seriesExternalLoreWords += computeCuratedLoreFolderWords($narrativesRootDir . '/' . $relLoreFolder);
+    }
+    $seriesMusicLoreWords = 0;
+    if (isset($bookMusicArtistMap[$seriesSlug])) {
+        $mArtistSlug = $bookMusicArtistMap[$seriesSlug];
+        $seriesMusicLoreWords = $errArtistLinerWords[$mArtistSlug] ?? 0;
+    }
+
+    $seriesTotalLoreWords = $seriesInternalLoreWords + $seriesExternalLoreWords + $seriesMusicLoreWords;
+    $seriesCombinedWords  = $seriesStoryWordCount + $seriesTotalLoreWords;
+    $seriesStoryPages     = $seriesStoryWordCount > 0 ? max(1, (int)round($seriesStoryWordCount / 275)) : 0;
+    $seriesCombinedPages  = $seriesCombinedWords > 0 ? max(1, (int)round($seriesCombinedWords / 275)) : 0;
+    $seriesReadingHours   = $seriesStoryWordCount > 0 ? round($seriesStoryWordCount / 15000, 1) : 0.0;
+    $seriesReadingMinutes = $seriesStoryWordCount > 0 ? max(1, (int)round($seriesStoryWordCount / 250)) : 0;
+    $scaleInfo            = classifyPublishingScale($seriesStoryWordCount, $seriesCombinedWords);
+
+    $seriesWordStats = [
+        'story_word_count'    => $seriesStoryWordCount,
+        'lore_word_count'     => $seriesTotalLoreWords,
+        'combined_word_count' => $seriesCombinedWords,
+        'story_page_count'    => $seriesStoryPages,
+        'combined_page_count' => $seriesCombinedPages,
+        'reading_hours'       => $seriesReadingHours,
+        'reading_minutes'     => $seriesReadingMinutes,
+        'novel_equivalent'    => $scaleInfo['novel_equivalent'],
+        'scale_category'      => $scaleInfo['category'],
+        'scale_badge'         => $scaleInfo['badge'],
+        'benchmark_note'      => $scaleInfo['benchmark_note'],
+        'era_count'           => count($tocBooks),
+        'chapter_count'       => $seriesChapCountTotal,
+        'part_count'          => $seriesPartCountTotal,
+        'illustration_count'  => $seriesIllustrationCount
+    ];
+
     if ($isTargetedBuild) {
         // Transform and map routes for the Ocean View Book Library (books.raggiesoft.com)
         $newRouteData = [];
@@ -845,6 +1181,7 @@ foreach ($narrativeDirs as $narrativeDir) {
         $newRouteData['common']['theme'] = "oceanview";
         $newRouteData['common']['ebook_sizes'] = $ebookSizes;
         $newRouteData['common']['illustration_count'] = $seriesIllustrationCount;
+        $newRouteData['common']['word_stats'] = $seriesWordStats;
 
         foreach ($routeData as $key => $val) {
             if ($key === 'common') continue;
@@ -883,11 +1220,12 @@ foreach ($narrativeDirs as $narrativeDir) {
             'next_series_url' => $seriesMeta['next_series_url'] ?? '',
             'ebook_sizes' => $ebookSizes,
             'illustration_count' => $seriesIllustrationCount,
+            'word_stats' => $seriesWordStats,
             'eras' => $tocBooks
         ];
         $tocDestFile = $assetDestDir . '/' . $seriesSlug . '/toc.json';
         file_put_contents($tocDestFile, json_encode($generatedToc, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-        echo "  [Assets] Saved auto-discovered Table of Contents (with {$seriesIllustrationCount} illustrations & eBook sizes) to toc.json\n";
+        echo "  [Assets] Saved auto-discovered Table of Contents (with {$seriesIllustrationCount} illustrations, " . number_format($seriesStoryWordCount) . " story words & eBook sizes) to toc.json\n";
 
         // Package the book's toc.json, ovab.json, landing.md, and e* Markdown tree into <slug>-package.7z
         buildSeriesSevenZipPackage($seriesAssetDir, $seriesSlug);
@@ -911,7 +1249,8 @@ foreach ($narrativeDirs as $narrativeDir) {
         'folder' => $narrativeName,
         'hide' => isset($seriesMeta['hide']) ? $seriesMeta['hide'] : false,
         'ebook_sizes' => $ebookSizes,
-        'illustration_count' => $seriesIllustrationCount
+        'illustration_count' => $seriesIllustrationCount,
+        'word_stats' => $seriesWordStats
     ];
 }
 
@@ -919,6 +1258,140 @@ foreach ($narrativeDirs as $narrativeDir) {
 $catalogFile = $assetDestDir . '/catalog.json';
 file_put_contents($catalogFile, json_encode($masterCatalog, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 echo "\n  [Catalog] Master Catalog saved to: {$catalogFile}\n";
+
+// --- COMPILE LIVE LIBRARY-WIDE WORD COUNT & SCALE TELEMETRY (`library-stats.json`) ---
+$universalLoreWords   = computeCuratedLoreFolderWords($narrativesRootDir . '/universal-lore');
+$amayaLoreWords       = computeCuratedLoreFolderWords($narrativesRootDir . '/lore/amaya');
+$rescueGameLoreWords  = computeCuratedLoreFolderWords($narrativesRootDir . '/lore/rescue-game');
+$courtneyLoreWords    = computeCuratedLoreFolderWords($narrativesRootDir . '/lore/courtney');
+$characterListWords   = computeCuratedLoreFolderWords($narrativesRootDir . '/character-list');
+$rulesLoreWords       = computeCuratedLoreFolderWords($narrativesRootDir . '/rules');
+$backstageSharedWords = computeCuratedLoreFolderWords($narrativesRootDir . '/backstage/corporations')
+                      + computeCuratedLoreFolderWords($narrativesRootDir . '/backstage/locations');
+
+$otherErrLinerWords = 0;
+$mappedMusicArtists = array_values($bookMusicArtistMap);
+foreach ($errArtistLinerWords as $aSlug => $lWords) {
+    if (!in_array($aSlug, $mappedMusicArtists, true)) {
+        $otherErrLinerWords += $lWords;
+    }
+}
+$totalLyricsWords = array_sum($errArtistLyricsWords);
+
+$sharedUniverseLoreWords = $universalLoreWords
+                         + $amayaLoreWords
+                         + $rescueGameLoreWords
+                         + $courtneyLoreWords
+                         + $characterListWords
+                         + $rulesLoreWords
+                         + $backstageSharedWords
+                         + $otherErrLinerWords;
+
+$totalStoryWords     = 0;
+$totalBookLoreWords  = 0;
+$totalErasCount      = 0;
+$totalChapsCount     = 0;
+$totalPartsCount     = 0;
+$totalIllusCount     = 0;
+$activeStoryVolumes  = 0;
+$statsBooksRows      = [];
+
+foreach ($masterCatalog as $catBook) {
+    $ws = $catBook['word_stats'] ?? [];
+    $sWords = (int)($ws['story_word_count'] ?? 0);
+    $lWords = (int)($ws['lore_word_count'] ?? 0);
+    if ($sWords > 0) {
+        $activeStoryVolumes++;
+    }
+    $totalStoryWords    += $sWords;
+    $totalBookLoreWords += $lWords;
+    $totalErasCount     += (int)($ws['era_count'] ?? 0);
+    $totalChapsCount    += (int)($ws['chapter_count'] ?? 0);
+    $totalPartsCount    += (int)($ws['part_count'] ?? 0);
+    $totalIllusCount    += (int)($catBook['illustration_count'] ?? 0);
+
+    $statsBooksRows[] = [
+        'slug'              => $catBook['slug'],
+        'title'             => $catBook['title'],
+        'image'             => $catBook['image'],
+        'short_description' => $catBook['short_description'],
+        'ebook_sizes'       => $catBook['ebook_sizes'],
+        'word_stats'        => $ws
+    ];
+}
+
+usort($statsBooksRows, static function (array $a, array $b): int {
+    $sa = (int)($a['word_stats']['story_word_count'] ?? 0);
+    $sb = (int)($b['word_stats']['story_word_count'] ?? 0);
+    if ($sa !== $sb) {
+        return $sb <=> $sa;
+    }
+    $ca = (int)($a['word_stats']['combined_word_count'] ?? 0);
+    $cb = (int)($b['word_stats']['combined_word_count'] ?? 0);
+    return $cb <=> $ca;
+});
+
+$totalCuratedLoreWords = $totalBookLoreWords + $sharedUniverseLoreWords;
+$totalCombinedWords    = $totalStoryWords + $totalCuratedLoreWords;
+$totalWithLyricsWords  = $totalCombinedWords + $totalLyricsWords;
+
+$libraryStatsPayload = [
+    'generated_at'                     => gmdate('c'),
+    'volume_count'                     => count($masterCatalog),
+    'active_story_volume_count'        => $activeStoryVolumes,
+    'total_eras'                       => $totalErasCount,
+    'total_chapters'                   => $totalChapsCount,
+    'total_parts'                      => $totalPartsCount,
+    'total_illustrations'              => $totalIllusCount,
+    'total_story_words'                => $totalStoryWords,
+    'total_book_lore_words'            => $totalBookLoreWords,
+    'total_shared_universe_lore_words' => $sharedUniverseLoreWords,
+    'total_curated_lore_words'         => $totalCuratedLoreWords,
+    'total_lyrics_words'               => $totalLyricsWords,
+    'total_combined_words'             => $totalCombinedWords,
+    'total_combined_with_lyrics_words' => $totalWithLyricsWords,
+    'total_story_pages'                => max(1, (int)round($totalStoryWords / 275)),
+    'total_combined_pages'             => max(1, (int)round($totalCombinedWords / 275)),
+    'total_reading_hours'              => round($totalStoryWords / 15000, 1),
+    'total_novel_equivalents'          => round($totalStoryWords / 90000, 1),
+    'total_combined_novel_equivalents' => round($totalCombinedWords / 90000, 1),
+    'shared_lore_breakdown'            => [
+        [
+            'label' => 'Universal Lore Archive (CPI, Transit, Cities & Institutions)',
+            'words' => $universalLoreWords
+        ],
+        [
+            'label' => 'Amaya Rios & The Wall of Twenty Lore Dossier',
+            'words' => $amayaLoreWords
+        ],
+        [
+            'label' => 'Eastern Shore Rescue & Tactical Lore Archive',
+            'words' => $rescueGameLoreWords
+        ],
+        [
+            'label' => 'Engine Room Records Standalone Band Liner Notes & Track Lore',
+            'words' => $otherErrLinerWords
+        ],
+        [
+            'label' => 'Engine Room Records Complete Song Lyrics (All 8 Roster Bands)',
+            'words' => $totalLyricsWords
+        ],
+        [
+            'label' => 'Character Profiles, Backstage Dossiers & Editorial Standards',
+            'words' => $characterListWords + $rulesLoreWords + $backstageSharedWords + $courtneyLoreWords
+        ]
+    ],
+    'books' => $statsBooksRows
+];
+
+$libraryStatsLocalFile = $booksAppDir . '/data/library-stats.json';
+$libraryStatsCdnFile   = $assetDestDir . '/../json/library-stats.json';
+$libraryStatsJson      = json_encode($libraryStatsPayload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+file_put_contents($libraryStatsLocalFile, $libraryStatsJson);
+if (is_dir(dirname($libraryStatsCdnFile))) {
+    file_put_contents($libraryStatsCdnFile, $libraryStatsJson);
+}
+echo "  [Stats] Live Library Word Count & Scale Telemetry (" . number_format($totalStoryWords) . " story words / " . number_format($totalCombinedWords) . " combined words) saved to: {$libraryStatsLocalFile}\n";
 
 // Write the local eBook file sizes manifest for books.raggiesoft.com
 $ebookSizesManifestFile = $booksAppDir . '/data/ebook-sizes.json';
