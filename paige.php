@@ -781,6 +781,9 @@ foreach ($narrativeDirs as $narrativeDir) {
                             $extractedTitle = substr($extractedTitle, 1, -1);
                         }
                         $extractedTitle = trim(str_replace('\"', '"', $extractedTitle));
+                        // Strip any redundant leading "Part X:" prefix from YAML `title:` so
+                        // multi-part chapters never render "Part X: Part X: <Title>".
+                        $extractedTitle = trim((string)preg_replace('/^(?:Part\s+\d+\s*:\s*)+/i', '', $extractedTitle));
                         if ($extractedTitle !== '' && strcasecmp($extractedTitle, 'Untitled Chapter') !== 0 && strcasecmp($extractedTitle, 'Untitled') !== 0) {
                             $yamlTitle = $extractedTitle;
                         } elseif ($chapPartCount === 1) {
