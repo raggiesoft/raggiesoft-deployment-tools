@@ -101,7 +101,11 @@ ASSETS_ROOT="$SERVER_ROOT/raggiesoft-assets"
 
 HUB_ROOT="$SERVER_ROOT/raggiesoft.com/www"
 CMS_ROOT="$SERVER_ROOT/stardust-engine-cms"
-NARRATIVES_ROOT="$SERVER_ROOT/raggiesoft-narratives"
+if [ -d "$SERVER_ROOT/raggiesoft-novels" ]; then
+    NARRATIVES_ROOT="$SERVER_ROOT/raggiesoft-novels"
+else
+    NARRATIVES_ROOT="$SERVER_ROOT/raggiesoft-narratives"
+fi
 NEBULAE_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/nebulae"
 BOOKS_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/books"
 LORE_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/lore"

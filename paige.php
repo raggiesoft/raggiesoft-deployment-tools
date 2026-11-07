@@ -69,7 +69,10 @@ $parentRoot     = dirname(__DIR__);
 $serverRoot     = is_dir($parentRoot . '/raggiesoft-servers')
     ? ($parentRoot . '/raggiesoft-servers')
     : $parentRoot;
-$sourceBooksDir = $serverRoot . '/raggiesoft-narratives/books';
+$narrativesRoot = is_dir($serverRoot . '/raggiesoft-novels')
+    ? ($serverRoot . '/raggiesoft-novels')
+    : ($serverRoot . '/raggiesoft-narratives');
+$sourceBooksDir = $narrativesRoot . '/books';
 $assetDestDir   = $serverRoot . '/raggiesoft-assets/raggiesoft-books/books';
 $indexDestFile  = $serverRoot . '/raggiesoft-assets/raggiesoft-books/json/search-index.json';
 $booksAppDir    = is_dir($serverRoot . '/raggiesoft.com/subdomains/books')

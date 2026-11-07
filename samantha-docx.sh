@@ -49,8 +49,13 @@ for DIR in books/*/; do
     else
         SERVER_ROOT=".."
     fi
-    OUT_LORE_DIR="$SERVER_ROOT/raggiesoft-narratives/lore/$BASE"
-    OUT_NARRATIVE_DIR="$SERVER_ROOT/raggiesoft-narratives/books/$BASE"
+    if [[ -d "$SERVER_ROOT/raggiesoft-novels" ]]; then
+        NARRATIVES_ROOT="$SERVER_ROOT/raggiesoft-novels"
+    else
+        NARRATIVES_ROOT="$SERVER_ROOT/raggiesoft-narratives"
+    fi
+    OUT_LORE_DIR="$NARRATIVES_ROOT/lore/$BASE"
+    OUT_NARRATIVE_DIR="$NARRATIVES_ROOT/books/$BASE"
     FINAL_WEB_LORE="$OUT_LORE_DIR/${BASE}-lore.md"
 
     # -----------------------------------------
