@@ -128,7 +128,7 @@ while read -r tracks_file; do
     # --------------------------------------------------------------------------
     # 3. Master Discography Generation
     # --------------------------------------------------------------------------
-    MASTER_DISCO_FILE="$ROOT_DIR/$SEARCH_PATH/$ARTIST_SLUG/$ARTIST_SLUG-discography-and-lyrics.md"
+    MASTER_DISCO_FILE="$SEARCH_PATH/$ARTIST_SLUG/$ARTIST_SLUG-discography-and-lyrics.md"
 
     # Initialize the file if it doesn't exist or is completely empty
     if [ ! -f "$MASTER_DISCO_FILE" ] || [ "$OVERWRITE" = true ]; then
@@ -354,7 +354,7 @@ while read -r tracks_file; do
     # -> Track reference sheet with separated `Name` and `Version` fields ready at the
     # distributor upload screen.
     export DSP_SHEET_FILE="dsp-upload-sheet.md"
-    export ARTIST_DSP_GUIDE="$ROOT_DIR/$SEARCH_PATH/$ARTIST_SLUG/$ARTIST_SLUG-dsp-upload-guide.md"
+    export ARTIST_DSP_GUIDE="$SEARCH_PATH/$ARTIST_SLUG/$ARTIST_SLUG-dsp-upload-guide.md"
 
     echo "      📋 HARPER: Generating DSP Upload Reference Sheet ($DSP_SHEET_FILE)..."
     node -e '
