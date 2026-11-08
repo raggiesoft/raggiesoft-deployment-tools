@@ -527,6 +527,7 @@ $bookLoreFolderMap = [
     'ashley-tower'              => ['lore/ashley-tower'],
     'ad-astra'                  => ['lore/ad-astra'],
     'drew'                      => ['lore/drew'],
+    'katie'                     => ['lore/katie'],
     'nate'                      => ['lore/nate'],
     'samantha'                  => ['lore/samantha'],
     'crimson-node'              => ['lore/crimson-node', 'lore/shiloh'],
