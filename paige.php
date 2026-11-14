@@ -911,10 +911,12 @@ foreach ($narrativeDirs as $narrativeDir) {
                     "theme" => "raggiesoft-books",
                     "filePath" => $relPath
                 ];
-                if ($chapPartCount === 1 && strpos($partSlug, 'part-1-') !== 0) {
-                    $legacyPart1RouteUrl = "/raggiesoft-books/books/{$seriesSlug}/{$eraSlug}/{$chapSlug}/part-1-{$partSlug}";
-                    $routeData[$legacyPart1RouteUrl] = $routeData[$routeUrl];
-                }
+                // Architectural SEO Note:
+                // Single-part chapters use the clean canonical slug (`/<partSlug>`) without a
+                // redundant `part-1-` prefix. Legacy `/part-1-<partSlug>` bookmarks are permanently
+                // 301-redirected by `eleanor/isabel.php` rather than duplicated inside `$routeData`,
+                // ensuring `$fileToUrl`, sequential Prev/Next navigation, and XML sitemaps emit
+                // strictly one canonical URL per manuscript part.
                 $lastRouteUrl = $routeUrl; // Continually update to capture the very last part
 
                 $partImgCount = count($partImages);
@@ -1482,12 +1484,31 @@ if (is_file($errCatalogFile)) {
             'url' => "https://music.raggiesoft.com/{$artistSlug}/{$albumSlug}"
         ];
 
-        // Register track-level preview cards
+        // Helper: Resolves the canonical clean song slug matching `buildCanonicalTrackSlug`
+        // in `subdomains/music/scripts/build-catalog.js` so every cross-domain music link
+        // resolves directly to `https://music.raggiesoft.com/[artist]/[album]/[track]`
+        // without `?track=` query strings.
+        $resolveCanonicalTrackSlug = static function (array $trackItem, string $fileName): string {
+            $explicitSlug = trim((string)($trackItem['slug'] ?? ''));
+            if ($explicitSlug !== '') {
+                return $explicitSlug;
+            }
+            $cleaned = preg_replace('/\.mp3$/i', '', trim($fileName));
+            $cleaned = preg_replace('/^\d+-\d+-/', '', (string)$cleaned);
+            $cleaned = preg_replace('/^\d+-/', '', (string)$cleaned);
+            $cleaned = strtolower(trim((string)preg_replace('/[^a-z0-9]+/i', '-', (string)$cleaned), '-'));
+            return $cleaned !== '' ? $cleaned : 'track';
+        };
+
+        // Register track-level preview cards (indexed under both canonical path & legacy ?track= key)
         foreach ($tracksList as $tIdx => $trackItem) {
             $fileName = trim((string)($trackItem['fileName'] ?? ''));
             if ($fileName === '') {
                 continue;
             }
+            $trackSlug = $resolveCanonicalTrackSlug($trackItem, $fileName);
+            $canonicalTrackUrl = "https://music.raggiesoft.com/{$artistSlug}/{$albumSlug}/{$trackSlug}";
+
             $trackTitle = trim((string)($trackItem['title'] ?? ''));
             if ($trackTitle === '') {
                 $trackTitle = ucwords(str_replace('-', ' ', preg_replace('/^\d+-\d+-/', '', $fileName)));
@@ -1512,7 +1533,7 @@ if (is_file($errCatalogFile)) {
                 $trackLore = $albumDesc;
             }
 
-            $allLinkPreviews["music://{$artistSlug}/{$albumSlug}?track={$fileName}"] = [
+            $trackPreviewCard = [
                 'kind' => 'music',
                 'kicker' => 'The Listening Room • ' . $artistName,
                 'title' => $trackTitle,
@@ -1520,8 +1541,11 @@ if (is_file($errCatalogFile)) {
                 'location' => $trackLocation,
                 'image' => $albumPreviewImg,
                 'excerpt' => $trackLore,
-                'url' => "https://music.raggiesoft.com/{$artistSlug}/{$albumSlug}?track={$fileName}"
+                'url' => $canonicalTrackUrl
             ];
+
+            $allLinkPreviews["music://{$artistSlug}/{$albumSlug}/{$trackSlug}"] = $trackPreviewCard;
+            $allLinkPreviews["music://{$artistSlug}/{$albumSlug}?track={$fileName}"] = $trackPreviewCard;
         }
     }
 
@@ -1576,8 +1600,13 @@ if (is_file($errCatalogFile)) {
             foreach ($tracksList as $tIdx => $trackItem) {
                 $fileName = trim((string)($trackItem['fileName'] ?? ''));
                 if ($fileName === '') continue;
-                $trackKey = "music://{$artistSlug}/{$albumSlug}?track={$fileName}";
-                if (isset($allLinkPreviews[$trackKey])) continue;
+                $cleanedFallback = preg_replace('/\.mp3$/i', '', $fileName);
+                $cleanedFallback = preg_replace('/^\d+-\d+-/', '', (string)$cleanedFallback);
+                $cleanedFallback = preg_replace('/^\d+-/', '', (string)$cleanedFallback);
+                $trackSlug = trim((string)($trackItem['slug'] ?? '')) ?: (strtolower(trim((string)preg_replace('/[^a-z0-9]+/i', '-', (string)$cleanedFallback), '-')) ?: 'track');
+                $canonicalTrackKey = "music://{$artistSlug}/{$albumSlug}/{$trackSlug}";
+                $legacyTrackKey = "music://{$artistSlug}/{$albumSlug}?track={$fileName}";
+                if (isset($allLinkPreviews[$canonicalTrackKey]) && isset($allLinkPreviews[$legacyTrackKey])) continue;
 
                 $trackTitle = trim((string)($trackItem['title'] ?? ''));
                 if ($trackTitle === '') {
@@ -1590,7 +1619,7 @@ if (is_file($errCatalogFile)) {
                 $trackLore = $truncateMusicExcerpt((string)($trackItem['loreNote'] ?? ''));
                 if ($trackLore === '') $trackLore = $albumDesc;
 
-                $allLinkPreviews[$trackKey] = [
+                $fallbackCard = [
                     'kind' => 'music',
                     'kicker' => 'The Listening Room • ' . $artistName,
                     'title' => $trackTitle,
@@ -1598,8 +1627,14 @@ if (is_file($errCatalogFile)) {
                     'location' => $trackLoc,
                     'image' => $albumPreviewImg,
                     'excerpt' => $trackLore,
-                    'url' => "https://music.raggiesoft.com/{$artistSlug}/{$albumSlug}?track={$fileName}"
+                    'url' => "https://music.raggiesoft.com/{$artistSlug}/{$albumSlug}/{$trackSlug}"
                 ];
+                if (!isset($allLinkPreviews[$canonicalTrackKey])) {
+                    $allLinkPreviews[$canonicalTrackKey] = $fallbackCard;
+                }
+                if (!isset($allLinkPreviews[$legacyTrackKey])) {
+                    $allLinkPreviews[$legacyTrackKey] = $fallbackCard;
+                }
             }
         }
     }
@@ -1630,6 +1665,250 @@ echo "  [Previews] Wikipedia-style link preview index (" . count($allLinkPreview
 // Write the full-text search index file
 file_put_contents($indexDestFile, json_encode($searchIndex, JSON_UNESCAPED_SLASHES));
 echo "  [Search] Full-text search index (" . count($searchIndex) . " parts) saved to: {$indexDestFile}\n";
+
+// ============================================================================
+// XML SITEMAPS & ROBOTS.TXT COMPILER FOR RAGGIESOFT BOOK READER
+// ============================================================================
+// Generates `robots.txt`, `sitemap.xml` (Sitemap Index), and 4 categorized child
+// sitemaps (`sitemaps/{editorial,books,chapters,parts}.xml`) inside
+// `raggiesoft.com/subdomains/books` so Google, Bing, and social crawlers can
+// discover every canonical book, era, chapter, and deep manuscript part URL
+// with truthful filesystem `<lastmod>` dates (YYYY-MM-DD).
+$booksSubdomainDir = $serverRoot . '/raggiesoft.com/subdomains/books';
+if (is_dir($booksSubdomainDir)) {
+    $booksOrigin = 'https://books.raggiesoft.com';
+    $sitemapsDir = $booksSubdomainDir . '/sitemaps';
+    if (!is_dir($sitemapsDir)) {
+        mkdir($sitemapsDir, 0755, true);
+    }
+
+    $getLatestIsoDate = static function (array $paths, string $fallback = '2026-04-01'): string {
+        $maxTs = 0;
+        foreach ($paths as $p) {
+            if (is_string($p) && $p !== '' && file_exists($p)) {
+                $mt = @filemtime($p);
+                if ($mt !== false && $mt > $maxTs) {
+                    $maxTs = $mt;
+                }
+            }
+        }
+        return $maxTs > 0 ? gmdate('Y-m-d', $maxTs) : $fallback;
+    };
+
+    $escapeXmlLoc = static function (string $val): string {
+        return htmlspecialchars($val, ENT_XML1 | ENT_QUOTES, 'UTF-8');
+    };
+
+    $renderSitemapUrlSet = static function (array $entries) use ($escapeXmlLoc): string {
+        $rows = [];
+        foreach ($entries as $entry) {
+            $rows[] = "  <url>\n    <loc>" . $escapeXmlLoc($entry['loc']) . "</loc>\n    <lastmod>" . $escapeXmlLoc($entry['lastmod']) . "</lastmod>\n  </url>";
+        }
+        return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n" . implode("\n", $rows) . "\n</urlset>\n";
+    };
+
+    $booksCatalogBySlug = [];
+    foreach ($masterCatalog as $catEntry) {
+        if (!empty($catEntry['slug'])) {
+            $booksCatalogBySlug[$catEntry['slug']] = $catEntry;
+        }
+    }
+
+    $oliverTplPath   = $booksSubdomainDir . '/sophia/oliver.php';
+    $landingTplPath  = $booksSubdomainDir . '/sophia/landing.php';
+    $tocTplPath      = $booksSubdomainDir . '/sophia/toc.php';
+    $illusTplPath    = $booksSubdomainDir . '/sophia/illustrations.php';
+    $eraTocTplPath   = $booksSubdomainDir . '/sophia/era-toc.php';
+    $chapTocTplPath  = $booksSubdomainDir . '/sophia/chap-toc.php';
+
+    $bookSitemapEntries    = [];
+    $chapterSitemapEntries = [];
+    $partSitemapEntries    = [];
+    $globalLatestBookMod   = '2026-04-01';
+
+    $routeFilesOnDisk = glob($newRoutesDestDir . '/*.json') ?: [];
+    sort($routeFilesOnDisk);
+
+    foreach ($routeFilesOnDisk as $rFile) {
+        $sSlug = basename($rFile, '.json');
+        $catMeta = $booksCatalogBySlug[$sSlug] ?? null;
+        if ($catMeta !== null && !empty($catMeta['hide'])) {
+            continue;
+        }
+        $bookFolder = $catMeta['folder'] ?? $sSlug;
+        $bookNarrDir = $narrativesRootDir . '/books/' . $bookFolder;
+        if (!is_dir($bookNarrDir)) {
+            continue;
+        }
+
+        $rMap = json_decode((string)@file_get_contents($rFile), true);
+        if (!is_array($rMap)) {
+            continue;
+        }
+        $sIllusCount = (int)($rMap['common']['illustration_count'] ?? ($catMeta['illustration_count'] ?? 0));
+
+        // Track maximum content modification timestamp across this book's manuscript files
+        $bookMaxMod = $getLatestIsoDate([
+            $bookNarrDir . '/ovab.json',
+            $bookNarrDir . '/landing.md',
+            $rFile
+        ]);
+
+        // Pre-scan era & chapter folders on disk for accurate era/chapter `<lastmod>`
+        $bDirsForMod = glob($bookNarrDir . '/e*', GLOB_ONLYDIR) ?: [];
+        sort($bDirsForMod);
+        $eraMaxMods = [];
+        $chapMaxMods = [];
+        foreach ($bDirsForMod as $bIdx => $bPath) {
+            $eMod = $getLatestIsoDate([$bPath . '/ovab.json'], $bookMaxMod);
+            $cDirsForMod = glob($bPath . '/c*', GLOB_ONLYDIR) ?: [];
+            sort($cDirsForMod);
+            foreach ($cDirsForMod as $cIdx => $cPath) {
+                $pFilesForMod = glob($cPath . '/p*.md') ?: [];
+                $cMod = $getLatestIsoDate(array_merge([$cPath . '/ovab.json'], $pFilesForMod), $eMod);
+                $chapMaxMods["{$bIdx}|{$cIdx}"] = $cMod;
+                if ($cMod > $eMod) {
+                    $eMod = $cMod;
+                }
+                if ($cMod > $bookMaxMod) {
+                    $bookMaxMod = $cMod;
+                }
+            }
+            $eraMaxMods[(string)$bIdx] = $eMod;
+        }
+        if ($bookMaxMod > $globalLatestBookMod) {
+            $globalLatestBookMod = $bookMaxMod;
+        }
+
+        foreach ($rMap as $routePath => $rCfg) {
+            if ($routePath === 'common' || !is_string($routePath) || !str_starts_with($routePath, '/')) {
+                continue;
+            }
+            $cleanPath = ($routePath !== '/') ? rtrim($routePath, '/') : '/';
+            $fp = (string)($rCfg['filePath'] ?? '');
+            if ($fp === '') {
+                continue;
+            }
+
+            if ($fp === '__SERIES_LANDING__') {
+                $tplMod = $getLatestIsoDate([$landingTplPath], $bookMaxMod);
+                $bookSitemapEntries[$cleanPath] = [
+                    'loc'     => $booksOrigin . $cleanPath,
+                    'lastmod' => max($bookMaxMod, $tplMod)
+                ];
+            } elseif ($fp === '__TOC__') {
+                $tplMod = $getLatestIsoDate([$tocTplPath], $bookMaxMod);
+                $bookSitemapEntries[$cleanPath] = [
+                    'loc'     => $booksOrigin . $cleanPath,
+                    'lastmod' => max($bookMaxMod, $tplMod)
+                ];
+            } elseif ($fp === '__ILLUSTRATIONS__') {
+                if ($sIllusCount > 0) {
+                    $tplMod = $getLatestIsoDate([$illusTplPath], $bookMaxMod);
+                    $bookSitemapEntries[$cleanPath] = [
+                        'loc'     => $booksOrigin . $cleanPath,
+                        'lastmod' => max($bookMaxMod, $tplMod)
+                    ];
+                }
+            } elseif (str_starts_with($fp, '__ERA_TOC__|')) {
+                $eIdxKey = substr($fp, strlen('__ERA_TOC__|'));
+                $eBaseMod = $eraMaxMods[$eIdxKey] ?? $bookMaxMod;
+                $tplMod = $getLatestIsoDate([$eraTocTplPath], $eBaseMod);
+                $chapterSitemapEntries[$cleanPath] = [
+                    'loc'     => $booksOrigin . $cleanPath,
+                    'lastmod' => max($eBaseMod, $tplMod)
+                ];
+            } elseif (str_starts_with($fp, '__CHAP_TOC__|')) {
+                $cIdxKey = substr($fp, strlen('__CHAP_TOC__|'));
+                $cBaseMod = $chapMaxMods[$cIdxKey] ?? $bookMaxMod;
+                $tplMod = $getLatestIsoDate([$chapTocTplPath], $cBaseMod);
+                $chapterSitemapEntries[$cleanPath] = [
+                    'loc'     => $booksOrigin . $cleanPath,
+                    'lastmod' => max($cBaseMod, $tplMod)
+                ];
+            } else {
+                // Skip any legacy `/part-1-` single-part alias if present in an older route file
+                if (preg_match('#^/(.+)/part-1-([^/]+)$#', $cleanPath, $aliasMatch)) {
+                    $canonicalCandidate = '/' . $aliasMatch[1] . '/' . $aliasMatch[2];
+                    if (isset($rMap[$canonicalCandidate])) {
+                        continue;
+                    }
+                }
+                $partDiskPath = $bookNarrDir . '/' . ltrim($fp, '/');
+                $partMod = $getLatestIsoDate([$partDiskPath, $oliverTplPath], $bookMaxMod);
+                $partSitemapEntries[$cleanPath] = [
+                    'loc'     => $booksOrigin . $cleanPath,
+                    'lastmod' => $partMod
+                ];
+            }
+        }
+    }
+
+    ksort($bookSitemapEntries);
+    ksort($chapterSitemapEntries);
+    ksort($partSitemapEntries);
+
+    $editorialRouteDefs = [
+        '/'              => ['files' => [$booksSubdomainDir . '/sophia/home.php'],              'withCatalog' => true],
+        '/library'       => ['files' => [$booksSubdomainDir . '/sophia/catalog.php'],           'withCatalog' => true],
+        '/illustrations' => ['files' => [$booksSubdomainDir . '/sophia/all-illustrations.php'], 'withCatalog' => true],
+        '/stats'         => ['files' => [$booksSubdomainDir . '/sophia/stats.php'],             'withCatalog' => true],
+        '/knox'          => ['files' => [$booksSubdomainDir . '/sophia/knox.php'],              'withCatalog' => false],
+        '/aethel-saga'   => ['files' => [$booksSubdomainDir . '/sophia/aethel-saga.php'],       'withCatalog' => false],
+        '/about'         => ['files' => [$booksSubdomainDir . '/sophia/about.php'],             'withCatalog' => false],
+        '/accessibility' => ['files' => [$booksSubdomainDir . '/sophia/accessibility.php'],     'withCatalog' => false],
+    ];
+    $editorialSitemapEntries = [];
+    foreach ($editorialRouteDefs as $edPath => $edCfg) {
+        $fMod = $getLatestIsoDate($edCfg['files'], '2026-04-01');
+        $edMod = ($edCfg['withCatalog'] && $globalLatestBookMod > $fMod) ? $globalLatestBookMod : $fMod;
+        $editorialSitemapEntries[] = [
+            'loc'     => $booksOrigin . ($edPath === '/' ? '/' : $edPath),
+            'lastmod' => $edMod
+        ];
+    }
+
+    $childSitemapGroups = [
+        'editorial.xml' => array_values($editorialSitemapEntries),
+        'books.xml'     => array_values($bookSitemapEntries),
+        'chapters.xml'  => array_values($chapterSitemapEntries),
+        'parts.xml'     => array_values($partSitemapEntries),
+    ];
+
+    $sitemapIndexRows = [];
+    $totalIndexedBookUrls = 0;
+    foreach ($childSitemapGroups as $smFileName => $smEntries) {
+        file_put_contents($sitemapsDir . '/' . $smFileName, $renderSitemapUrlSet($smEntries));
+        $maxGroupMod = '2026-04-01';
+        foreach ($smEntries as $smItem) {
+            if ($smItem['lastmod'] > $maxGroupMod) {
+                $maxGroupMod = $smItem['lastmod'];
+            }
+        }
+        $totalIndexedBookUrls += count($smEntries);
+        $sitemapIndexRows[] = "  <sitemap>\n    <loc>{$booksOrigin}/sitemaps/{$smFileName}</loc>\n    <lastmod>{$maxGroupMod}</lastmod>\n  </sitemap>";
+    }
+
+    $sitemapIndexXml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<sitemapindex xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n" . implode("\n", $sitemapIndexRows) . "\n</sitemapindex>\n";
+    file_put_contents($booksSubdomainDir . '/sitemap.xml', $sitemapIndexXml);
+
+    $robotsTxt = implode("\n", [
+        '# Ocean View Archives — RaggieSoft Book Reader (https://books.raggiesoft.com)',
+        '# Free CC BY-SA 4.0 serialized novels, scene illustrations, and lore archives by Michael P. Ragsdale.',
+        'User-agent: *',
+        'Allow: /',
+        'Disallow: /bookmarks',
+        'Disallow: /settings',
+        'Disallow: /welcome',
+        'Disallow: /setup',
+        '',
+        'Sitemap: https://books.raggiesoft.com/sitemap.xml',
+        ''
+    ]);
+    file_put_contents($booksSubdomainDir . '/robots.txt', $robotsTxt);
+
+    echo "  [Sitemap] Generated robots.txt + /sitemap.xml index (" . number_format($totalIndexedBookUrls) . " canonical URLs across 4 child sitemaps)\n";
+}
 
 echo "========================================================\n";
 echo "👩‍🏫 PAIGE: All done, Michael. Every book is indexed and safe on the shelves.\n";
