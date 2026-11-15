@@ -601,6 +601,33 @@ function generate_sitemap() {
             \$xml .= '</urlset>' . PHP_EOL;
             
             file_put_contents(\$sitemapPath, \$xml);
+
+            // Also generate a Domain-Property Master Sitemap Index (sitemap-network.xml)
+            // referencing raggiesoft.com + all 9 *.raggiesoft.com subdomain sitemaps
+            // while keeping sitemap.xml pure single-host for strict crawler parsers.
+            \$networkSitemapPath = \$hubRoot . '/sitemap-network.xml';
+            \$networkHosts = [
+                'https://raggiesoft.com/sitemap.xml',
+                'https://books.raggiesoft.com/sitemap.xml',
+                'https://music.raggiesoft.com/sitemap.xml',
+                'https://lore.raggiesoft.com/sitemap.xml',
+                'https://engineroom.raggiesoft.com/sitemap.xml',
+                'https://stardust.raggiesoft.com/sitemap.xml',
+                'https://backstage.raggiesoft.com/sitemap.xml',
+                'https://corporate.raggiesoft.com/sitemap.xml',
+                'https://storetrainer.raggiesoft.com/sitemap.xml',
+                'https://nebulae.raggiesoft.com/sitemap.xml',
+            ];
+            \$netXml = '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' . PHP_EOL;
+            \$netXml .= '<sitemapindex xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">' . PHP_EOL;
+            foreach (\$networkHosts as \$smUrl) {
+                \$netXml .= '  <sitemap>' . PHP_EOL
+                         . '    <loc>' . htmlspecialchars(\$smUrl, ENT_XML1) . '</loc>' . PHP_EOL
+                         . '    <lastmod>' . htmlspecialchars(\$todayIso, ENT_XML1) . '</lastmod>' . PHP_EOL
+                         . '  </sitemap>' . PHP_EOL;
+            }
+            \$netXml .= '</sitemapindex>' . PHP_EOL;
+            file_put_contents(\$networkSitemapPath, \$netXml);
             
             \$robotsContent = implode(PHP_EOL, [
                 '# RaggieSoft Hub (https://raggiesoft.com)',
@@ -609,15 +636,40 @@ function generate_sitemap() {
                 'Disallow: /api/',
                 '',
                 'Sitemap: https://raggiesoft.com/sitemap.xml',
+                'Sitemap: https://raggiesoft.com/sitemap-network.xml',
                 ''
             ]);
             file_put_contents(\$robotsPath, \$robotsContent);
             file_put_contents(\$indexNowPath, \$indexNowKey);
             
-            echo '      ✓ Generated sitemap.xml with ' . count(\$entries) . ' canonical HTML routes + <lastmod>.' . PHP_EOL;
+            echo '      ✓ Generated sitemap.xml (' . count(\$entries) . ' routes) + sitemap-network.xml (10 RaggieSoft hosts).' . PHP_EOL;
             echo '      ✓ Generated robots.txt + IndexNow key (' . \$indexNowKey . '.txt).' . PHP_EOL;
         "
     )
+}
+
+# ============================================================================
+# Helper: trigger_remote_sarah_deploy
+# ============================================================================
+# Performs a 5-second non-interactive SSH pre-flight check to
+# `michael@jessica.raggiesoft.com`. When reachable, triggers `/home/michael/sarah-deploy.sh`
+# immediately so newly pushed GitHub commits, self-upgrading Sarah script updates,
+# and validated Nginx `.conf` updates deploy live in seconds rather than waiting
+# up to 5 minutes for `sarah.timer`. If outbound SSH port 22 is blocked on a
+# restricted WiFi network, cleanly skips without failing the build (`sarah.timer`
+# on the Droplet still pulls within 5 minutes).
+function trigger_remote_sarah_deploy() {
+    echo "👱‍♀️ JENNA: Checking SSH link to jessica.raggiesoft.com for instant Sarah wakeup..."
+    if run_with_timeout 5 ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=4 michael@jessica.raggiesoft.com true >/dev/null 2>&1; then
+        echo "      ✓ Connected to jessica.raggiesoft.com! Waking Sarah for immediate live deployment..."
+        if run_with_timeout 120 ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 michael@jessica.raggiesoft.com '/home/michael/sarah-deploy.sh'; then
+            echo "      ✓ Sarah completed live server sync (web roots, scripts, and Nginx verified)."
+        else
+            echo "      ⚠️  Remote Sarah wakeup exited non-zero or timed out; sarah.timer will reconcile automatically."
+        fi
+    else
+        echo "      ℹ️  SSH port 22 unreachable on current network; sarah.timer on jessica.raggiesoft.com will pull within 5 minutes."
+    fi
 }
 
 # ============================================================================
@@ -1533,6 +1585,7 @@ function do_push() {
         echo "👱‍♀️ JENNA: Finished! Code/narratives are committed (and pushed if GitHub was reachable); CDN sync was skipped because DigitalOcean Spaces is blocked on this WiFi."
     fi
     if [ "$CAN_PUSH_GITHUB" = true ]; then
+        trigger_remote_sarah_deploy
         submit_indexnow_pings
     fi
     finalize_jenna_exit

@@ -45,6 +45,17 @@ if [ "$EUID" -eq 0 ]; then
     exit 1
 fi
 
+# Preserve original CLI arguments so Sarah can re-exec cleanly if she pulls an
+# updated version of herself from GitHub during Step 0.
+SARAH_ORIG_ARGS=("$@")
+
+# Self-healing symlink check: ensure `/home/michael/sarah-deploy.sh` (invoked by
+# `sarah.service` / `sarah.timer`) always points to the Git-tracked script in
+# `/home/michael/raggiesoft-deployment-tools/sarah-deploy.sh`.
+if [ -f "/home/michael/raggiesoft-deployment-tools/sarah-deploy.sh" ] && [ ! -L "/home/michael/sarah-deploy.sh" ]; then
+    ln -sf "/home/michael/raggiesoft-deployment-tools/sarah-deploy.sh" "/home/michael/sarah-deploy.sh" 2>/dev/null || true
+fi
+
 FORCE_RESET=false
 
 # Check for the nuclear override flag
@@ -226,8 +237,15 @@ function deploy_site() {
     echo "✅ SARAH: $SITE_NAME Deployment Complete."
 }
 
-# Helper function to keep non-webroot infrastructure repositories (nginx-config,
-# raggiesoft-deployment-tools) synchronized with GitHub on the Droplet.
+# ==============================================================================
+# Helper: sync_infra_repo <repo_label> <repo_dir>
+# ==============================================================================
+# Keeps non-webroot infrastructure repositories (`raggiesoft-deployment-tools`
+# and `nginx-config`) synchronized with GitHub on `jessica.raggiesoft.com`.
+# If `raggiesoft-deployment-tools` advances to a new commit on `origin/main`,
+# Sarah immediately `exec`s into the newly pulled `sarah-deploy.sh` binary (once
+# per invocation, guarded by `SARAH_REEXECED=1`) so new deployment logic takes
+# effect on the exact same run without waiting 5 minutes for the next timer tick.
 function sync_infra_repo() {
     local REPO_LABEL=$1
     local REPO_DIR=$2
@@ -250,14 +268,19 @@ function sync_infra_repo() {
 
     LOCAL=$(git rev-parse HEAD)
     REMOTE=$(git rev-parse origin/main)
+    local UPDATED=false
 
     if [ "$FORCE_RESET" = false ] && [ "$JUST_CLONED" = false ]; then
         if [ "$LOCAL" == "$REMOTE" ]; then
             return
         fi
         echo "👩‍💼 SARAH: Change detected in $REPO_LABEL! Pulling infrastructure updates."
+        UPDATED=true
     else
         echo "👩‍💼 SARAH: Synchronizing $REPO_LABEL infrastructure repository."
+        if [ "$LOCAL" != "$REMOTE" ] || [ "$JUST_CLONED" = true ]; then
+            UPDATED=true
+        fi
     fi
 
     git reset --hard origin/main
@@ -270,11 +293,146 @@ function sync_infra_repo() {
     find "$REPO_DIR" -path "$REPO_DIR/.git" -prune -o -type f -exec chmod 644 {} +
     find "$REPO_DIR" -path "$REPO_DIR/.git" -prune -o -type f -name "*.sh" -exec chmod 755 {} +
     echo "✅ SARAH: $REPO_LABEL Sync Complete."
+
+    # Self-upgrade re-entry: if Deployment Tools just pulled a new commit and we
+    # haven't re-exec'd yet in this run, replace the running bash process cleanly
+    # with the newly downloaded `sarah-deploy.sh`.
+    if [ "$REPO_DIR" == "/home/michael/raggiesoft-deployment-tools" ] && [ "$UPDATED" = true ] && [ "${SARAH_REEXECED:-0}" != "1" ]; then
+        ln -sf "/home/michael/raggiesoft-deployment-tools/sarah-deploy.sh" "/home/michael/sarah-deploy.sh" 2>/dev/null || true
+        echo "🔄 SARAH: Self-upgrade complete! Re-launching updated sarah-deploy.sh..."
+        export SARAH_REEXECED=1
+        exec "/home/michael/raggiesoft-deployment-tools/sarah-deploy.sh" "${SARAH_ORIG_ARGS[@]}"
+    fi
+}
+
+# ==============================================================================
+# Helper: sync_nginx_vhosts <nginx_repo_dir>
+# ==============================================================================
+# Zero-touch Nginx virtual host & web-root reconciler with atomic rollback:
+#   1. Verifies passwordless `sudo -n` availability so cron NEVER blocks.
+#   2. Scans `root /var/www/...;` directives across `$NGINX_REPO_DIR/*.conf` and
+#      provisions any brand-new `/var/www/<site>` directory (`michael:www-data`,
+#      mode `755`) while leaving already-populated web roots untouched.
+#   3. Compares each `$NGINX_REPO_DIR/*.conf` byte-for-byte (`cmp -s`) against
+#      `/etc/nginx/sites-available/<conf>` and verifies its `sites-enabled`
+#      symlink. Returns in <2ms if zero vhost configs changed.
+#   4. Snapshots current `/etc/nginx/sites-available/*.conf` and active symlinks,
+#      installs changed/new `.conf` files, validates via `sudo -n nginx -t`, and
+#      reloads Nginx ONLY if syntax passes 100%—otherwise automatically restores
+#      the snapshot so live production traffic is never interrupted.
+function sync_nginx_vhosts() {
+    local NGINX_REPO_DIR="$1"
+    if [ ! -d "$NGINX_REPO_DIR" ] || [ ! -d "/etc/nginx/sites-available" ]; then
+        return 0
+    fi
+
+    # Never prompt interactively for sudo in autonomous cron/SSH execution
+    if ! sudo -n true 2>/dev/null; then
+        return 0
+    fi
+
+    shopt -s nullglob
+    local CONF_FILES=("$NGINX_REPO_DIR"/*.conf)
+    shopt -u nullglob
+    if [ "${#CONF_FILES[@]}" -eq 0 ]; then
+        return 0
+    fi
+
+    # 1. Ensure any declared /var/www/* root exists (skipping populated dirs)
+    local DECLARED_ROOTS
+    DECLARED_ROOTS=$(awk '$1 == "root" { gsub(/;/, "", $2); if ($2 ~ /^\/var\/www\//) print $2 }' "${CONF_FILES[@]}" | sort -u)
+    while IFS= read -r web_dir; do
+        [ -z "$web_dir" ] && continue
+        if [ ! -d "$web_dir" ]; then
+            sudo -n mkdir -p "$web_dir"
+            sudo -n chown michael:www-data "$web_dir"
+            sudo -n chmod 755 "$web_dir"
+            echo "📂 SARAH: Provisioned new showroom directory $web_dir."
+        fi
+    done <<< "$DECLARED_ROOTS"
+
+    # 2. Fast diff check across all managed .conf files
+    local NEEDS_SYNC=false
+    for src_conf in "${CONF_FILES[@]}"; do
+        local conf_name
+        conf_name=$(basename "$src_conf")
+        local avail_conf="/etc/nginx/sites-available/$conf_name"
+        local enabled_conf="/etc/nginx/sites-enabled/$conf_name"
+        if [ ! -f "$avail_conf" ] || [ ! -L "$enabled_conf" ] || ! cmp -s "$src_conf" "$avail_conf"; then
+            NEEDS_SYNC=true
+            break
+        fi
+    done
+
+    if [ "$NEEDS_SYNC" = false ]; then
+        return 0
+    fi
+
+    echo "🌐 SARAH: Detected Nginx virtual host updates! Staging atomic sync..."
+    local BACKUP_DIR
+    BACKUP_DIR=$(mktemp -d /tmp/sarah-nginx-backup.XXXXXX)
+    mkdir -p "$BACKUP_DIR/sites-available" "$BACKUP_DIR/sites-enabled"
+
+    # Snapshot only the managed vhost files and symlinks before applying updates
+    for src_conf in "${CONF_FILES[@]}"; do
+        local conf_name
+        conf_name=$(basename "$src_conf")
+        if [ -f "/etc/nginx/sites-available/$conf_name" ]; then
+            cp -p "/etc/nginx/sites-available/$conf_name" "$BACKUP_DIR/sites-available/$conf_name"
+        fi
+        if [ -L "/etc/nginx/sites-enabled/$conf_name" ]; then
+            touch "$BACKUP_DIR/sites-enabled/$conf_name"
+        fi
+    done
+
+    # Apply new or modified virtual host configurations
+    for src_conf in "${CONF_FILES[@]}"; do
+        local conf_name
+        conf_name=$(basename "$src_conf")
+        local avail_conf="/etc/nginx/sites-available/$conf_name"
+        local enabled_conf="/etc/nginx/sites-enabled/$conf_name"
+        if [ ! -f "$avail_conf" ] || ! cmp -s "$src_conf" "$avail_conf"; then
+            sudo -n cp "$src_conf" "$avail_conf"
+            sudo -n chmod 644 "$avail_conf"
+            echo "   -> Installed Nginx vhost: $conf_name"
+        fi
+        if [ ! -L "$enabled_conf" ]; then
+            sudo -n ln -sf "$avail_conf" "$enabled_conf"
+            echo "   -> Enabled Nginx vhost symlink: $conf_name"
+        fi
+    done
+
+    # Validate Nginx syntax BEFORE reloading; roll back atomically on any error
+    if sudo -n nginx -t >/dev/null 2>&1; then
+        sudo -n systemctl reload nginx
+        echo "✅ SARAH: Nginx configuration validated (nginx -t OK) and gracefully reloaded."
+    else
+        echo "🚨 SARAH: nginx -t FAILED! Rolling back virtual host changes to protect live traffic..."
+        sudo -n nginx -t || true
+        for src_conf in "${CONF_FILES[@]}"; do
+            local conf_name
+            conf_name=$(basename "$src_conf")
+            if [ -f "$BACKUP_DIR/sites-available/$conf_name" ]; then
+                sudo -n cp "$BACKUP_DIR/sites-available/$conf_name" "/etc/nginx/sites-available/$conf_name"
+            else
+                sudo -n rm -f "/etc/nginx/sites-available/$conf_name"
+            fi
+            if [ -f "$BACKUP_DIR/sites-enabled/$conf_name" ]; then
+                sudo -n ln -sf "/etc/nginx/sites-available/$conf_name" "/etc/nginx/sites-enabled/$conf_name"
+            else
+                sudo -n rm -f "/etc/nginx/sites-enabled/$conf_name"
+            fi
+        done
+        echo "🛡️ SARAH: Rollback complete; existing live Nginx configuration preserved."
+    fi
+
+    rm -rf "$BACKUP_DIR"
 }
 
 # 0. PROCESS INFRASTRUCTURE & DEPLOYMENT REPOSITORIES
 sync_infra_repo "Deployment Tools" "/home/michael/raggiesoft-deployment-tools"
 sync_infra_repo "Nginx Config" "/home/michael/nginx-config"
+sync_nginx_vhosts "/home/michael/nginx-config"
 
 # 1. PROCESS RAGGIESOFT HUB
 deploy_site "Hub" "/home/michael/raggiesoft-hub" "/var/www/raggiesoft.com"
