@@ -365,6 +365,7 @@ function show_help() {
     echo "  ./jenna-sync.sh --push -m \"Commit Message\" [-t \"v1.0.0\"] [--force]"
     echo "  ./jenna-sync.sh --pull"
     echo "  ./jenna-sync.sh --audit"
+    echo "  ./jenna-sync.sh --indexnow"
     echo "Note: Jenna automatically tests GitHub & CDN connectivity (5s pre-flight probe) and reports back."
 }
 
@@ -526,8 +527,11 @@ function run_orphan_audit() {
     )
 }
 
+# Official RaggieSoft IndexNow API Key (hosted at /<INDEXNOW_KEY>.txt on every domain)
+readonly INDEXNOW_KEY="726167676965736f6674696e6465786e"
+
 function generate_sitemap() {
-    echo "👱‍♀️ JENNA: Generating XML Sitemap and robots.txt..."
+    echo "👱‍♀️ JENNA: Generating XML Sitemap, robots.txt, and IndexNow verification key..."
     (
         cd "$WORKSPACE_DIR" && php -r "
             \$hubRoot = realpath('../raggiesoft-servers/raggiesoft.com/www') ?: realpath('../raggiesoft.com/www') ?: realpath('../raggiesoft-hub');
@@ -539,8 +543,11 @@ function generate_sitemap() {
             \$routesDir = \$hubRoot . '/data/routes';
             \$sitemapPath = \$hubRoot . '/sitemap.xml';
             \$robotsPath = \$hubRoot . '/robots.txt';
+            \$indexNowKey = '${INDEXNOW_KEY}';
+            \$indexNowPath = \$hubRoot . '/' . \$indexNowKey . '.txt';
             
-            \$urls = [];
+            \$entries = [];
+            \$todayIso = gmdate('Y-m-d');
             
             if (is_dir(\$routesDir)) {
                 \$iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator(\$routesDir));
@@ -549,9 +556,30 @@ function generate_sitemap() {
                         \$jsonContent = file_get_contents(\$file->getPathname());
                         \$json = json_decode(\$jsonContent, true);
                         if (json_last_error() === JSON_ERROR_NONE && is_array(\$json)) {
+                            \$routeFileMtime = @filemtime(\$file->getPathname()) ?: time();
                             foreach (\$json as \$route => \$config) {
-                                if (\$route !== 'common' && strpos(\$route, '/') === 0 && empty(\$config['redirect'])) {
-                                    \$urls[] = 'https://raggiesoft.com' . \$route;
+                                if (\$route === 'common' || strpos(\$route, '/') !== 0) {
+                                    continue;
+                                }
+                                // Skip redirect routes and internal JSON/API endpoints (e.g., /api/lore)
+                                if (!empty(\$config['redirect']) || !empty(\$config['isApi']) || !empty(\$config['noindex'])) {
+                                    continue;
+                                }
+                                \$canonicalRoute = (\$route !== '/') ? rtrim(\$route, '/') : '/';
+                                \$fullUrl = 'https://raggiesoft.com' . \$canonicalRoute;
+                                \$bestMtime = \$routeFileMtime;
+                                if (!empty(\$config['view'])) {
+                                    \$viewPath = \$hubRoot . '/' . \$config['view'] . '.php';
+                                    if (is_file(\$viewPath)) {
+                                        \$vMtime = @filemtime(\$viewPath) ?: 0;
+                                        if (\$vMtime > \$bestMtime) {
+                                            \$bestMtime = \$vMtime;
+                                        }
+                                    }
+                                }
+                                \$lastmod = gmdate('Y-m-d', \$bestMtime) ?: \$todayIso;
+                                if (!isset(\$entries[\$fullUrl]) || \$lastmod > \$entries[\$fullUrl]) {
+                                    \$entries[\$fullUrl] = \$lastmod;
                                 }
                             }
                         }
@@ -559,25 +587,123 @@ function generate_sitemap() {
                 }
             }
             
-            \$urls = array_unique(\$urls);
+            ksort(\$entries);
             
             \$xml = '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' . PHP_EOL;
             \$xml .= '<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">' . PHP_EOL;
             
-            foreach (\$urls as \$url) {
-                \$xml .= '  <url>' . PHP_EOL . '    <loc>' . htmlspecialchars(\$url) . '</loc>' . PHP_EOL . '  </url>' . PHP_EOL;
+            foreach (\$entries as \$url => \$lastmod) {
+                \$xml .= '  <url>' . PHP_EOL
+                      . '    <loc>' . htmlspecialchars(\$url, ENT_XML1) . '</loc>' . PHP_EOL
+                      . '    <lastmod>' . htmlspecialchars(\$lastmod, ENT_XML1) . '</lastmod>' . PHP_EOL
+                      . '  </url>' . PHP_EOL;
             }
-            \$xml .= '</urlset>';
+            \$xml .= '</urlset>' . PHP_EOL;
             
             file_put_contents(\$sitemapPath, \$xml);
             
-            \$robotsContent = 'User-agent: *' . PHP_EOL . 'Sitemap: https://raggiesoft.com/sitemap.xml' . PHP_EOL;
+            \$robotsContent = implode(PHP_EOL, [
+                '# RaggieSoft Hub (https://raggiesoft.com)',
+                'User-agent: *',
+                'Allow: /',
+                'Disallow: /api/',
+                '',
+                'Sitemap: https://raggiesoft.com/sitemap.xml',
+                ''
+            ]);
             file_put_contents(\$robotsPath, \$robotsContent);
+            file_put_contents(\$indexNowPath, \$indexNowKey);
             
-            echo '      ✓ Generated sitemap.xml with ' . count(\$urls) . ' dynamic routes.' . PHP_EOL;
-            echo '      ✓ Generated robots.txt pointer.' . PHP_EOL;
+            echo '      ✓ Generated sitemap.xml with ' . count(\$entries) . ' canonical HTML routes + <lastmod>.' . PHP_EOL;
+            echo '      ✓ Generated robots.txt + IndexNow key (' . \$indexNowKey . '.txt).' . PHP_EOL;
         "
     )
+}
+
+# ============================================================================
+# Helper: submit_indexnow_pings
+# ============================================================================
+# Submits canonical URLs from every compiled RaggieSoft property's XML sitemaps
+# to `https://api.indexnow.org/indexnow` (Bing, Yandex, DuckDuckGo, Naver, Seznam,
+# Yep) using non-blocking 6-second bounded requests. Never fails the build even
+# if a subdomain is offline or not yet provisioned on the remote server.
+function submit_indexnow_pings() {
+    echo "👱‍♀️ JENNA: Broadcasting updated canonical URLs via IndexNow (Bing, DuckDuckGo, Yandex, Yep)..."
+    local SITEMAP_ROOTS=(
+        "$HUB_ROOT"
+        "$MUSIC_ROOT/build"
+        "$BOOKS_ROOT"
+        "$ENGINEROOM_ROOT/dist"
+        "$STARDUST_ROOT/.output/public"
+        "$CORPORATE_ROOT/dist"
+        "$STORETRAINER_ROOT/dist"
+        "$BACKSTAGE_ROOT/dist"
+        "$NEBULAE_ROOT"
+        "$LORE_ROOT/out"
+        "$PORTFOLIO_ROOT/dist/raggiesoft-portfolio/browser"
+    )
+
+    for web_dir in "${SITEMAP_ROOTS[@]}"; do
+        if [ ! -d "$web_dir" ]; then
+            continue
+        fi
+        local PAYLOAD_INFO
+        PAYLOAD_INFO=$(python3 - "$web_dir" "$INDEXNOW_KEY" <<'PYEOF' 2>/dev/null || true
+import sys, os, glob, json, urllib.parse, xml.etree.ElementTree as ET
+
+web_dir, key = sys.argv[1], sys.argv[2]
+xml_files = sorted(glob.glob(os.path.join(web_dir, "sitemaps", "*.xml")))
+if not xml_files:
+    sm = os.path.join(web_dir, "sitemap.xml")
+    if os.path.isfile(sm):
+        xml_files = [sm]
+
+urls = []
+seen = set()
+for xf in xml_files:
+    try:
+        root = ET.parse(xf).getroot()
+        if root.tag.endswith("sitemapindex"):
+            continue
+        for elem in root.iter():
+            if elem.tag.endswith("loc") and elem.text:
+                u = elem.text.strip()
+                if u and u not in seen:
+                    seen.add(u)
+                    urls.append(u)
+    except Exception:
+        pass
+
+if not urls:
+    sys.exit(0)
+
+host = urllib.parse.urlparse(urls[0]).netloc
+if not host:
+    sys.exit(0)
+
+print(host + "\t" + str(len(urls[:10000])) + "\t" + json.dumps({
+    "host": host,
+    "key": key,
+    "keyLocation": f"https://{host}/{key}.txt",
+    "urlList": urls[:10000]
+}))
+PYEOF
+)
+        if [ -z "$PAYLOAD_INFO" ]; then
+            continue
+        fi
+        local HOST_NAME URL_COUNT JSON_BODY
+        HOST_NAME=$(printf '%s' "$PAYLOAD_INFO" | cut -f1)
+        URL_COUNT=$(printf '%s' "$PAYLOAD_INFO" | cut -f2)
+        JSON_BODY=$(printf '%s' "$PAYLOAD_INFO" | cut -f3-)
+
+        local HTTP_CODE
+        HTTP_CODE=$(run_with_timeout 6 curl -sS -o /dev/null -w "%{http_code}" --max-time 5 \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d "$JSON_BODY" \
+            "https://api.indexnow.org/indexnow" 2>/dev/null || echo "000")
+        echo "      ✓ ${HOST_NAME}: submitted ${URL_COUNT} URLs (HTTP ${HTTP_CODE})"
+    done
 }
 
 function do_pull() {
@@ -638,7 +764,7 @@ function do_pull() {
         cd "$MUSIC_ROOT" && git pull origin main
     fi
 
-    echo "   5.65 Checking Engine Room Records, Stardust Engine, Corporate & StoreTrainer Subdomains..."
+    echo "   5.65 Checking Engine Room Records, Stardust Engine, Corporate, StoreTrainer & Backstage Subdomains..."
     if [ -d "$ENGINEROOM_ROOT/.git" ] && (cd "$ENGINEROOM_ROOT" && git remote get-url origin &>/dev/null); then
         cd "$ENGINEROOM_ROOT" && git pull origin main
     fi
@@ -650,6 +776,9 @@ function do_pull() {
     fi
     if [ -d "$STORETRAINER_ROOT/.git" ] && (cd "$STORETRAINER_ROOT" && git remote get-url origin &>/dev/null); then
         cd "$STORETRAINER_ROOT" && git pull origin main
+    fi
+    if [ -d "$BACKSTAGE_ROOT/.git" ] && (cd "$BACKSTAGE_ROOT" && git remote get-url origin &>/dev/null); then
+        cd "$BACKSTAGE_ROOT" && git pull origin main
     fi
 
     echo "   5.7 Checking Executive Systems Architect Dossier (michaelpragsdale.com/www)..."
@@ -1403,6 +1532,9 @@ function do_push() {
     else
         echo "👱‍♀️ JENNA: Finished! Code/narratives are committed (and pushed if GitHub was reachable); CDN sync was skipped because DigitalOcean Spaces is blocked on this WiFi."
     fi
+    if [ "$CAN_PUSH_GITHUB" = true ]; then
+        submit_indexnow_pings
+    fi
     finalize_jenna_exit
 }
 
@@ -1417,6 +1549,7 @@ while [[ "$#" -gt 0 ]]; do
         --push) ACTION="push" ;;
         --pull) ACTION="pull" ;;
         --audit) ACTION="audit" ;;
+        --indexnow) ACTION="indexnow" ;;
         --force) FORCE_FLAG="--force" ;;
         --msg|-m) COMMIT_MSG="$2"; shift ;;
         --tag|-t) TAG_NAME="$2"; shift ;;
@@ -1433,5 +1566,6 @@ case "$ACTION" in
     pull) do_pull ;;
     push) do_push ;;
     audit) run_orphan_audit ;;
+    indexnow) submit_indexnow_pings ;;
     *) show_help ;;
 esac

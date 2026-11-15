@@ -1417,6 +1417,8 @@ $errCatalogFile = $serverRoot . '/raggiesoft-assets/engine-room-records/catalog.
 if (is_file($errCatalogFile)) {
     $errCatalog = json_decode((string)@file_get_contents($errCatalogFile), true) ?: [];
     $artistRollup = [];
+    $liveCatalogAlbums = [];
+    $liveArtistTrackUrls = [];
     $truncateMusicExcerpt = static function (string $rawText, int $maxLen = 215): string {
         $clean = strip_tags($rawText);
         $clean = preg_replace('/\[([^\]]+)\]\([^)]*\)/', '$1', $clean);
@@ -1472,7 +1474,8 @@ if (is_file($errCatalogFile)) {
             $albumDesc = "Stream {$albumTitle} by {$artistName} in The Listening Room with synchronized lyrics, studio liner notes, and lossless master playback.";
         }
 
-        // Register album-level preview card
+        // Register album-level preview card and mark as a live Listening Room album
+        $liveCatalogAlbums["{$artistSlug}/{$albumSlug}"] = true;
         $allLinkPreviews["music://{$artistSlug}/{$albumSlug}"] = [
             'kind' => 'music',
             'kicker' => 'The Listening Room • ' . $artistName,
@@ -1546,17 +1549,27 @@ if (is_file($errCatalogFile)) {
 
             $allLinkPreviews["music://{$artistSlug}/{$albumSlug}/{$trackSlug}"] = $trackPreviewCard;
             $allLinkPreviews["music://{$artistSlug}/{$albumSlug}?track={$fileName}"] = $trackPreviewCard;
+            if (!isset($liveArtistTrackUrls[$artistSlug][$trackSlug])) {
+                $liveArtistTrackUrls[$artistSlug][$trackSlug] = $canonicalTrackUrl;
+            }
         }
     }
 
     // Also scan any artist/album folders in `raggiesoft-assets/engine-room-records/artists/`
-    // that have `album.json` / `tracks.json` so every album/track on disk is indexed.
+    // that have `album.json` / `tracks.json` so legacy `music://` hovercard keys still work,
+    // while strictly skipping non-album asset folders (`images/`, `story/`, `fleet/`) and
+    // resolving retired/split album folders to live Listening Room URLs so zero 404s occur.
     $artistFolders = glob($serverRoot . '/raggiesoft-assets/engine-room-records/artists/*', GLOB_ONLYDIR) ?: [];
     foreach ($artistFolders as $artistFolder) {
         $artistSlug = basename($artistFolder);
         $albumFolders = glob($artistFolder . '/*', GLOB_ONLYDIR) ?: [];
         foreach ($albumFolders as $albumFolder) {
+            // Skip non-album media subfolders (e.g., `images`, `story`, `fleet`, `social-media-images`)
+            if (!is_file($albumFolder . '/album.json') && !is_file($albumFolder . '/tracks.json')) {
+                continue;
+            }
             $albumSlug = basename($albumFolder);
+            $isLiveCatalogAlbum = !empty($liveCatalogAlbums["{$artistSlug}/{$albumSlug}"]);
             $albumKey = "music://{$artistSlug}/{$albumSlug}";
             $relAlbumSocial = "/engine-room-records/artists/{$artistSlug}/{$albumSlug}/social-preview.jpg";
             $relAlbumCover  = "/engine-room-records/artists/{$artistSlug}/{$albumSlug}/album-art.jpg";
@@ -1583,6 +1596,10 @@ if (is_file($errCatalogFile)) {
                 $albumDesc = "Stream {$albumTitle} by {$artistName} in The Listening Room with synchronized lyrics, studio liner notes, and lossless master playback.";
             }
 
+            $fallbackAlbumUrl = $isLiveCatalogAlbum
+                ? "https://music.raggiesoft.com/{$artistSlug}/{$albumSlug}"
+                : "https://music.raggiesoft.com/{$artistSlug}";
+
             if (!isset($allLinkPreviews[$albumKey])) {
                 $tCount = count($tracksList);
                 $allLinkPreviews[$albumKey] = [
@@ -1593,7 +1610,7 @@ if (is_file($errCatalogFile)) {
                     'location' => $tCount > 0 ? "{$tCount} Tracks" : 'Album Archive',
                     'image' => $albumPreviewImg,
                     'excerpt' => $albumDesc,
-                    'url' => "https://music.raggiesoft.com/{$artistSlug}/{$albumSlug}"
+                    'url' => $fallbackAlbumUrl
                 ];
             }
 
@@ -1619,6 +1636,10 @@ if (is_file($errCatalogFile)) {
                 $trackLore = $truncateMusicExcerpt((string)($trackItem['loreNote'] ?? ''));
                 if ($trackLore === '') $trackLore = $albumDesc;
 
+                $fallbackTrackUrl = $isLiveCatalogAlbum
+                    ? "https://music.raggiesoft.com/{$artistSlug}/{$albumSlug}/{$trackSlug}"
+                    : ($liveArtistTrackUrls[$artistSlug][$trackSlug] ?? "https://music.raggiesoft.com/{$artistSlug}");
+
                 $fallbackCard = [
                     'kind' => 'music',
                     'kicker' => 'The Listening Room • ' . $artistName,
@@ -1627,7 +1648,7 @@ if (is_file($errCatalogFile)) {
                     'location' => $trackLoc,
                     'image' => $albumPreviewImg,
                     'excerpt' => $trackLore,
-                    'url' => "https://music.raggiesoft.com/{$artistSlug}/{$albumSlug}/{$trackSlug}"
+                    'url' => $fallbackTrackUrl
                 ];
                 if (!isset($allLinkPreviews[$canonicalTrackKey])) {
                     $allLinkPreviews[$canonicalTrackKey] = $fallbackCard;
@@ -1906,8 +1927,10 @@ if (is_dir($booksSubdomainDir)) {
         ''
     ]);
     file_put_contents($booksSubdomainDir . '/robots.txt', $robotsTxt);
+    $indexNowKey = '726167676965736f6674696e6465786e';
+    file_put_contents($booksSubdomainDir . '/' . $indexNowKey . '.txt', $indexNowKey);
 
-    echo "  [Sitemap] Generated robots.txt + /sitemap.xml index (" . number_format($totalIndexedBookUrls) . " canonical URLs across 4 child sitemaps)\n";
+    echo "  [Sitemap] Generated robots.txt + IndexNow key + /sitemap.xml index (" . number_format($totalIndexedBookUrls) . " canonical URLs across 4 child sitemaps)\n";
 }
 
 echo "========================================================\n";

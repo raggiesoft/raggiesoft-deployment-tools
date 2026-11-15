@@ -54,6 +54,79 @@ if [ "$1" == "--force-reset" ]; then
     echo "🚨 SARAH: NUCLEAR OVERRIDE INITIATED. Forcing a clean deployment..."
 fi
 
+# Official RaggieSoft IndexNow API Key (hosted at /<INDEXNOW_KEY>.txt on every domain)
+readonly INDEXNOW_KEY="726167676965736f6674696e6465786e"
+
+# ==============================================================================
+# Helper: notify_indexnow_for_webroot <web_root>
+# ==============================================================================
+# Reads `<loc>` entries from `$WEB_ROOT/sitemaps/*.xml` (if split sitemaps exist)
+# or `$WEB_ROOT/sitemap.xml` right after `rsync` finishes populating `/var/www/*`,
+# verifies that `$WEB_ROOT/$INDEXNOW_KEY.txt` is present on disk, and submits up
+# to 10,000 canonical URLs to `https://api.indexnow.org/indexnow` (Bing, Yandex,
+# DuckDuckGo, Naver, Seznam, Yep) with a hard 8-second timeout so cron never blocks.
+function notify_indexnow_for_webroot() {
+    local WEB_ROOT="$1"
+    if [ ! -f "$WEB_ROOT/${INDEXNOW_KEY}.txt" ]; then
+        return 0
+    fi
+    if ! command -v python3 >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local PAYLOAD
+    PAYLOAD=$(python3 - "$WEB_ROOT" "$INDEXNOW_KEY" <<'PYEOF' 2>/dev/null || true
+import sys, os, glob, json, urllib.parse, xml.etree.ElementTree as ET
+
+web_root, key = sys.argv[1], sys.argv[2]
+xml_files = sorted(glob.glob(os.path.join(web_root, "sitemaps", "*.xml")))
+if not xml_files:
+    sm = os.path.join(web_root, "sitemap.xml")
+    if os.path.isfile(sm):
+        xml_files = [sm]
+
+urls = []
+seen = set()
+for xf in xml_files:
+    try:
+        root = ET.parse(xf).getroot()
+        if root.tag.endswith("sitemapindex"):
+            continue
+        for elem in root.iter():
+            if elem.tag.endswith("loc") and elem.text:
+                u = elem.text.strip()
+                if u and u not in seen:
+                    seen.add(u)
+                    urls.append(u)
+    except Exception:
+        pass
+
+if not urls:
+    sys.exit(0)
+
+host = urllib.parse.urlparse(urls[0]).netloc
+if not host:
+    sys.exit(0)
+
+print(json.dumps({
+    "host": host,
+    "key": key,
+    "keyLocation": f"https://{host}/{key}.txt",
+    "urlList": urls[:10000]
+}))
+PYEOF
+)
+
+    if [ -n "$PAYLOAD" ]; then
+        local HTTP_CODE
+        HTTP_CODE=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 8 \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d "$PAYLOAD" \
+            "https://api.indexnow.org/indexnow" 2>/dev/null || echo "000")
+        echo "   -> IndexNow instant-crawl ping sent (HTTP $HTTP_CODE)."
+    fi
+}
+
 # Sarah's deployment brain
 function deploy_site() {
     # Function arguments mapping
@@ -79,6 +152,14 @@ function deploy_site() {
         JUST_CLONED=true
     fi
 
+    # Detect whether the target /var/www showroom directory is missing or empty
+    # (for example, right after install-subdomains.sh provisions a brand-new site)
+    # so Sarah hydrates it even when LOCAL == REMOTE!
+    local WEB_ROOT_EMPTY=false
+    if [ ! -d "$WEB_ROOT" ] || [ -z "$(ls -A "$WEB_ROOT" 2>/dev/null)" ]; then
+        WEB_ROOT_EMPTY=true
+    fi
+
     cd "$REPO_DIR" || return
 
     # Fetch the latest info from GitHub without modifying working tree
@@ -89,12 +170,14 @@ function deploy_site() {
     REMOTE=$(git rev-parse origin/main)
 
     # Standard intelligence check
-    if [ "$FORCE_RESET" = false ] && [ "$JUST_CLONED" = false ]; then
+    if [ "$FORCE_RESET" = false ] && [ "$JUST_CLONED" = false ] && [ "$WEB_ROOT_EMPTY" = false ]; then
         if [ "$LOCAL" == "$REMOTE" ]; then
-            # No changes detected, quietly exit function to keep cron logs clean
+            # No changes detected and web root is already populated; quietly exit
             return
         fi
         echo "👩‍💼 SARAH: Change detected in $SITE_NAME! Jenna pushed updates."
+    elif [ "$WEB_ROOT_EMPTY" = true ] && [ "$FORCE_RESET" = false ]; then
+        echo "👩‍💼 SARAH: Empty showroom detected at $WEB_ROOT for $SITE_NAME! Hydrating initial build."
     else
         echo "👩‍💼 SARAH: Bypassing version check for $SITE_NAME. Purging local repository cache."
     fi
@@ -139,6 +222,7 @@ function deploy_site() {
     # Standardize web server permissions to 755 for directories, 644 for files
     find "$WEB_ROOT" -type d -exec chmod 755 {} +
     find "$WEB_ROOT" -type f -exec chmod 644 {} +
+    notify_indexnow_for_webroot "$WEB_ROOT"
     echo "✅ SARAH: $SITE_NAME Deployment Complete."
 }
 
