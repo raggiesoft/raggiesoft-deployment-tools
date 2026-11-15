@@ -515,7 +515,7 @@ if (is_file($errPreloadCatalogFile)) {
 }
 
 $bookLoreFolderMap = [
-    'rachel'                    => ['lore/rachel'],
+    'rachel'                    => ['lore/rachel', 'backstage/books/rachel'],
     'aubrie'                    => ['lore/aubrie', 'backstage/books/aubrie'],
     'luna-leo'                  => ['lore/luna-leo'],
     'alex-chloe'                => ['lore/astro-kids'],
@@ -527,7 +527,7 @@ $bookLoreFolderMap = [
     'ashley-tower'              => ['lore/ashley-tower'],
     'ad-astra'                  => ['lore/ad-astra'],
     'drew'                      => ['lore/drew'],
-    'katie'                     => ['lore/katie'],
+    'katie'                     => ['lore/katie', 'backstage/books/katie'],
     'nate'                      => ['lore/nate'],
     'samantha'                  => ['lore/samantha'],
     'crimson-node'              => ['lore/crimson-node', 'lore/shiloh'],
