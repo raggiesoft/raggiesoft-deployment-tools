@@ -553,10 +553,98 @@ if (empty($narrativeDirs)) {
 
 // Master catalog array collecting high-level metadata for all series
 $masterCatalog = [];
+// Global Story Arcs (Reading Playlists) registry across all novels, compiled from per-book `arcs.json`
+$globalStoryArcs = [];
 // Full-text search index array collecting cleaned text across all scenes
 $searchIndex = [];
 // Lookup map of all series eBook file sizes for `raggiesoft.com/subdomains/books/data/ebook-sizes.json`
 $allEbookSizes = [];
+
+/*
+ * ============================================================================
+ * PRE-SCAN RAGGIESOFT BACKSTAGE DOSSIERS (`raggiesoft-narratives/backstage/`)
+ * ============================================================================
+ * Story Arc playlists (`books/<slug>/arcs.json`) can interleave narrative parts
+ * (`{ "part": "e010/c001/p002.md" }`) with behind-the-scenes Backstage bonus
+ * dossiers (`{ "backstage": "books/katie/north-lion-scales-and-tails-..." }`).
+ * Pre-indexing Backstage Markdown frontmatter directly from source allows Paige
+ * to compile rich, self-contained stop metadata (title, subtitle, date, artwork,
+ * summary, word count, and canonical URL) with zero circular build dependency
+ * on the static Backstage site build (`scripts/build.mjs`).
+ */
+$backstageDossierIndex = [];
+$backstageRootDir = $narrativesRootDir . '/backstage';
+if (is_dir($backstageRootDir)) {
+    $bsIter = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($backstageRootDir, FilesystemIterator::SKIP_DOTS)
+    );
+    foreach ($bsIter as $bsFileInfo) {
+        if (!$bsFileInfo->isFile() || strtolower($bsFileInfo->getExtension()) !== 'md') {
+            continue;
+        }
+        $absBsPath = $bsFileInfo->getPathname();
+        $relBsPath = str_replace('\\', '/', substr($absBsPath, strlen($backstageRootDir) + 1));
+        $bsSlug = preg_replace('/\.md$/i', '', $relBsPath);
+        if ($bsSlug === '' || str_ends_with($bsSlug, '/index') || $bsSlug === 'index') {
+            continue;
+        }
+        $bsRaw = (string)@file_get_contents($absBsPath);
+        $bsBody = $bsRaw;
+        $bsTitle = ucwords(str_replace('-', ' ', basename($bsSlug)));
+        $bsSubtitle = '';
+        $bsCategory = '';
+        $bsDate = '';
+        $bsLocation = '';
+        $bsImage = '';
+        $bsSummary = '';
+
+        if (preg_match('/^---([\s\S]*?)---/', ltrim($bsRaw), $bsFmMatch)) {
+            $bsFm = $bsFmMatch[1];
+            $bsBody = str_replace($bsFmMatch[0], '', $bsRaw);
+            $extractScalar = static function (string $fm, string $key): string {
+                if (preg_match('/^' . preg_quote($key, '/') . ':\s*(.+)$/m', $fm, $m)) {
+                    $v = trim($m[1]);
+                    if ((str_starts_with($v, '"') && str_ends_with($v, '"')) ||
+                        (str_starts_with($v, "'") && str_ends_with($v, "'"))) {
+                        $v = substr($v, 1, -1);
+                    }
+                    return trim(str_replace('\"', '"', $v));
+                }
+                return '';
+            };
+            $t = $extractScalar($bsFm, 'title');
+            if ($t !== '') $bsTitle = $t;
+            $bsSubtitle = $extractScalar($bsFm, 'subtitle');
+            $bsCategory = $extractScalar($bsFm, 'category');
+            $bsDate     = $extractScalar($bsFm, 'date');
+            $bsLocation = $extractScalar($bsFm, 'location');
+            $bsSummary  = $extractScalar($bsFm, 'summary');
+            $rawBsImg   = $extractScalar($bsFm, 'image');
+            if ($rawBsImg !== '') {
+                $normBsImg = preg_replace('/#.*$/', '', str_replace(['{{CDN}}', '{{cms}}', 'https://assets.raggiesoft.com'], '', $rawBsImg));
+                $normBsImg = '/' . ltrim((string)$normBsImg, '/');
+                if ($normBsImg !== '/') {
+                    $bsImage = $normBsImg;
+                }
+            }
+        }
+        $bsWords = countReadableProseWords($bsBody, false);
+        $backstageDossierIndex[$bsSlug] = [
+            'slug'            => $bsSlug,
+            'title'           => $bsTitle,
+            'subtitle'        => $bsSubtitle,
+            'category'        => $bsCategory,
+            'date'            => $bsDate,
+            'location'        => $bsLocation,
+            'image'           => $bsImage,
+            'summary'         => $bsSummary,
+            'word_count'      => $bsWords,
+            'reading_minutes' => max(1, (int)ceil($bsWords / 250)),
+            'url'             => 'https://backstage.raggiesoft.com/' . ltrim($bsSlug, '/') . '/',
+        ];
+    }
+}
+
 // Lookup map of all internal route preview cards for Wikipedia-style link hovercards (`data/link-previews.json`)
 $linkPreviewsManifestFile = $booksAppDir . '/data/link-previews.json';
 $allLinkPreviews = [];
@@ -574,6 +662,18 @@ $allLinkPreviews['/illustrations'] = [
     'image' => '/raggiesoft-books/images/covers/og/rachel.jpg',
     'excerpt' => 'Explore every full-bleed 16:9 chapter plate and inline archival illustration across The Rachel Narrative, The Eleventh Child, The Stardust Engine, and the entire Ocean View Archives catalog.',
     'url' => '/illustrations'
+];
+$allLinkPreviews['/arcs'] = [
+    'kind' => 'book',
+    'title' => 'Story Arcs & Reading Playlists',
+    'series' => 'Ocean View Archives',
+    'series_slug' => 'arcs',
+    'kicker' => 'Ocean View Archives • Curated Reading Playlists',
+    'date' => '',
+    'location' => 'Follow Individual Storylines Across Every Era',
+    'image' => '/raggiesoft-books/images/scenes/katie/b005/jun_2018_maplewood_north_lion_ribbon_cutting_earned_hug_nate_heather_wesley.jpg',
+    'excerpt' => 'Follow curated chapter-by-chapter Story Arcs—like Katie Prairie\'s political career or Heather, Wesley, and Chelsea at North Lion Scales & Tails—complete with behind-the-scenes bonus stops.',
+    'url' => '/arcs'
 ];
 
 foreach ($narrativeDirs as $narrativeDir) {
@@ -673,6 +773,8 @@ foreach ($narrativeDirs as $narrativeDir) {
     $seriesChapCountTotal = 0;
     $seriesPartCountTotal = 0;
     $seriesPartAbsPaths   = [];
+    // Lookup table mapping relative part file paths (`e010/c001/p002.md`) to compiled TOC metadata for `arcs.json`
+    $seriesPartsByRelPath = [];
 
     // Auto-discover Era directories strictly based on 'e*' naming convention
     $bDirs = glob($narrativeDir . '/e*', GLOB_ONLYDIR);
@@ -770,6 +872,7 @@ foreach ($narrativeDirs as $narrativeDir) {
                 $partLocation = '';
                 $partSummary = '';
                 $partImages = [];
+                $partBackstageSlugs = [];
                 $partContent = file_get_contents($pFile);
                 $bodyWithoutFrontmatter = $partContent;
 
@@ -837,6 +940,13 @@ foreach ($narrativeDirs as $narrativeDir) {
                                     $cleanVal = trim($v, "\"'");
                                     if ($cleanVal !== '') $fmImageAlts[] = $cleanVal;
                                 }
+                            } elseif ($k === 'backstage') {
+                                if ($v === '') {
+                                    $currentListKey = 'backstage';
+                                } else {
+                                    $cleanVal = trim($v, "/ \t\"'");
+                                    if ($cleanVal !== '') $partBackstageSlugs[] = $cleanVal;
+                                }
                             }
                         } elseif ($currentListKey !== null && preg_match('/^\s*-\s+(.*)$/', $fmLine, $listMatch)) {
                             $itemVal = trim($listMatch[1], " \t\"'");
@@ -845,6 +955,9 @@ foreach ($narrativeDirs as $narrativeDir) {
                                     $fmImageUrls[] = $itemVal;
                                 } elseif ($currentListKey === 'image_alt') {
                                     $fmImageAlts[] = $itemVal;
+                                } elseif ($currentListKey === 'backstage') {
+                                    $cleanBs = trim($itemVal, "/ \t\"'");
+                                    if ($cleanBs !== '') $partBackstageSlugs[] = $cleanBs;
                                 }
                             }
                         } elseif (preg_match('/^\S/', $fmLine)) {
@@ -985,7 +1098,29 @@ foreach ($narrativeDirs as $narrativeDir) {
                     $partEntry['images'] = $partImages;
                     $partEntry['image_count'] = $partImgCount;
                 }
+                if (!empty($partBackstageSlugs)) {
+                    $partEntry['backstage'] = array_values(array_unique($partBackstageSlugs));
+                }
                 $tocChap['parts'][] = $partEntry;
+
+                // Index compiled part metadata by relative path (`eXXX/cYYY/pZZZ.md`) for Story Arc compilation
+                $seriesPartsByRelPath[$relPath] = [
+                    'part_num'        => $partNum,
+                    'part_title'      => $partTitle,
+                    'era_num'         => $eraNum,
+                    'era_title'       => $eraTitle,
+                    'chap_num'        => $chapNum,
+                    'chap_title'      => $chapTitle,
+                    'file_path'       => $relPath,
+                    'url'             => $partStandaloneUrl,
+                    'date'            => $partDate !== '' ? $partDate : ($partStardate !== '' ? "Stardate {$partStardate}" : $partRealmTime),
+                    'location'        => $partLocation,
+                    'excerpt'         => $partExcerpt,
+                    'image'           => ($partImgCount > 0) ? $partImages[0]['src'] : '',
+                    'word_count'      => $partWordCount,
+                    'reading_minutes' => $partReadingMinutes,
+                    'backstage'       => $partEntry['backstage'] ?? [],
+                ];
 
                 $defaultSeriesOgImg = '/raggiesoft-books/images/covers/og/' . $seriesSlug . '.jpg';
                 $partPreviewImg = ($partImgCount > 0) ? $partImages[0]['src'] : $defaultSeriesOgImg;
@@ -1164,6 +1299,156 @@ foreach ($narrativeDirs as $narrativeDir) {
     $seriesReadingMinutes = $seriesStoryWordCount > 0 ? max(1, (int)round($seriesStoryWordCount / 250)) : 0;
     $scaleInfo            = classifyPublishingScale($seriesStoryWordCount, $seriesCombinedWords);
 
+    /*
+     * ========================================================================
+     * COMPILE MULTI-ARC STORY ARCS (`books/<slug>/arcs.json` -> `story_arcs`)
+     * ========================================================================
+     * Supports any number of curated Story Arc playlists per book under the
+     * `"arcs": [...]` array, seamlessly interleaving narrative chapter parts
+     * (`"part": "eXXX/cYYY/pZZZ.md"`) and behind-the-scenes Backstage bonus
+     * dossiers (`"backstage": "books/<slug>/<dossier>"`).
+     */
+    $storyArcs = [];
+    $storyArcSummaries = [];
+    $arcsManifestPath = $narrativeDir . '/arcs.json';
+    if (is_file($arcsManifestPath)) {
+        $rawArcsDoc = json_decode((string)@file_get_contents($arcsManifestPath), true);
+        $rawArcsList = is_array($rawArcsDoc['arcs'] ?? null) ? $rawArcsDoc['arcs'] : [];
+        foreach ($rawArcsList as $rawArc) {
+            $arcSlug = trim((string)($rawArc['slug'] ?? ''));
+            $arcTitle = trim((string)($rawArc['title'] ?? ''));
+            if ($arcSlug === '' || $arcTitle === '') {
+                continue;
+            }
+            $arcSubtitle = trim((string)($rawArc['subtitle'] ?? ''));
+            $arcDesc     = trim((string)($rawArc['description'] ?? ''));
+            $rawArcImg   = trim((string)($rawArc['image'] ?? ''));
+            $arcImage    = '/raggiesoft-books/images/covers/og/' . $seriesSlug . '.jpg';
+            if ($rawArcImg !== '') {
+                $normArcImg = preg_replace('/#.*$/', '', str_replace(['{{CDN}}', '{{cms}}', 'https://assets.raggiesoft.com'], '', $rawArcImg));
+                $normArcImg = '/' . ltrim((string)$normArcImg, '/');
+                if ($normArcImg !== '/') {
+                    $arcImage = $normArcImg;
+                }
+            }
+
+            $compiledStops = [];
+            $arcPartCount = 0;
+            $arcBackstageCount = 0;
+            $arcWordCount = 0;
+            $arcStartUrl = '';
+            $lastPartArcUrl = '';
+            $stopNum = 0;
+
+            foreach (($rawArc['stops'] ?? []) as $rawStop) {
+                if (!is_array($rawStop)) {
+                    continue;
+                }
+                if (!empty($rawStop['part'])) {
+                    $pRel = ltrim(str_replace('\\', '/', trim((string)$rawStop['part'])), '/');
+                    if (!isset($seriesPartsByRelPath[$pRel])) {
+                        fwrite(STDERR, "  [Arcs Warning] {$seriesSlug}/{$arcSlug}: Part '{$pRel}' not found in compiled TOC; skipping stop.\n");
+                        continue;
+                    }
+                    $pInfo = $seriesPartsByRelPath[$pRel];
+                    $stopNum++;
+                    $arcPartCount++;
+                    $arcWordCount += (int)$pInfo['word_count'];
+                    $stopArcUrl = $pInfo['url'] . '?arc=' . rawurlencode($arcSlug);
+                    if ($arcStartUrl === '') {
+                        $arcStartUrl = $stopArcUrl;
+                    }
+                    $lastPartArcUrl = $stopArcUrl;
+                    $compiledStops[] = [
+                        'stop_num'        => $stopNum,
+                        'kind'            => 'part',
+                        'series_slug'     => $seriesSlug,
+                        'series_title'    => $seriesTitle,
+                        'file_path'       => $pInfo['file_path'],
+                        'title'           => !empty($rawStop['title']) ? trim((string)$rawStop['title']) : $pInfo['part_title'],
+                        'subtitle'        => !empty($rawStop['subtitle']) ? trim((string)$rawStop['subtitle']) : ($pInfo['chap_title'] . ' • ' . $pInfo['era_title']),
+                        'era_title'       => $pInfo['era_title'],
+                        'chap_title'      => $pInfo['chap_title'],
+                        'date'            => $pInfo['date'],
+                        'location'        => $pInfo['location'],
+                        'excerpt'         => $pInfo['excerpt'],
+                        'image'           => ($pInfo['image'] !== '') ? $pInfo['image'] : $arcImage,
+                        'url'             => $pInfo['url'],
+                        'arc_url'         => $stopArcUrl,
+                        'word_count'      => (int)$pInfo['word_count'],
+                        'reading_minutes' => (int)$pInfo['reading_minutes'],
+                    ];
+                } elseif (!empty($rawStop['backstage'])) {
+                    $bsRel = trim(str_replace('\\', '/', trim((string)$rawStop['backstage'])), '/');
+                    $bsRel = preg_replace('/\.md$/i', '', $bsRel);
+                    $bsInfo = $backstageDossierIndex[$bsRel] ?? null;
+                    if ($bsInfo === null) {
+                        fwrite(STDERR, "  [Arcs Warning] {$seriesSlug}/{$arcSlug}: Backstage dossier '{$bsRel}' not found on disk; skipping stop.\n");
+                        continue;
+                    }
+                    $stopNum++;
+                    $arcBackstageCount++;
+                    $arcWordCount += (int)$bsInfo['word_count'];
+                    $compiledStops[] = [
+                        'stop_num'        => $stopNum,
+                        'kind'            => 'backstage',
+                        'series_slug'     => $seriesSlug,
+                        'series_title'    => $seriesTitle,
+                        'backstage_slug'  => $bsRel,
+                        'title'           => !empty($rawStop['title']) ? trim((string)$rawStop['title']) : $bsInfo['title'],
+                        'subtitle'        => !empty($rawStop['subtitle']) ? trim((string)$rawStop['subtitle']) : ($bsInfo['subtitle'] !== '' ? $bsInfo['subtitle'] : 'Behind-the-Scenes Bonus Scene'),
+                        'era_title'       => 'Behind the Scenes',
+                        'chap_title'      => $bsInfo['category'] !== '' ? $bsInfo['category'] : 'RaggieSoft Backstage',
+                        'date'            => $bsInfo['date'],
+                        'location'        => $bsInfo['location'],
+                        'excerpt'         => $bsInfo['summary'],
+                        'image'           => ($bsInfo['image'] !== '') ? $bsInfo['image'] : $arcImage,
+                        'url'             => $bsInfo['url'],
+                        'arc_url'         => $lastPartArcUrl !== '' ? $lastPartArcUrl : ('/' . $seriesSlug . '?arc=' . rawurlencode($arcSlug)),
+                        'word_count'      => (int)$bsInfo['word_count'],
+                        'reading_minutes' => (int)$bsInfo['reading_minutes'],
+                    ];
+                }
+            }
+
+            if (empty($compiledStops)) {
+                continue;
+            }
+            if ($arcStartUrl === '') {
+                $arcStartUrl = '/' . $seriesSlug;
+            }
+            $arcReadingMinutes = max(1, (int)ceil($arcWordCount / 250));
+            $arcReadingHours   = round($arcWordCount / 15000, 1);
+            $backstagePlaylistSlug = $seriesSlug . '-' . $arcSlug;
+
+            $compiledArc = [
+                'slug'                    => $arcSlug,
+                'series_slug'             => $seriesSlug,
+                'series_title'            => $seriesTitle,
+                'backstage_playlist_slug' => $backstagePlaylistSlug,
+                'backstage_playlist_url'  => 'https://backstage.raggiesoft.com/arcs/' . $backstagePlaylistSlug . '/',
+                'title'                   => $arcTitle,
+                'subtitle'                => $arcSubtitle,
+                'description'             => $arcDesc,
+                'image'                   => $arcImage,
+                'start_url'               => $arcStartUrl,
+                'part_count'              => $arcPartCount,
+                'backstage_count'         => $arcBackstageCount,
+                'stop_count'              => count($compiledStops),
+                'word_count'              => $arcWordCount,
+                'reading_minutes'         => $arcReadingMinutes,
+                'reading_hours'           => $arcReadingHours,
+                'stops'                   => $compiledStops,
+            ];
+            $storyArcs[] = $compiledArc;
+            $globalStoryArcs[] = $compiledArc;
+
+            $arcSummary = $compiledArc;
+            unset($arcSummary['stops']);
+            $storyArcSummaries[] = $arcSummary;
+        }
+    }
+
     $seriesWordStats = [
         'story_word_count'    => $seriesStoryWordCount,
         'lore_word_count'     => $seriesTotalLoreWords,
@@ -1179,7 +1464,8 @@ foreach ($narrativeDirs as $narrativeDir) {
         'era_count'           => count($tocBooks),
         'chapter_count'       => $seriesChapCountTotal,
         'part_count'          => $seriesPartCountTotal,
-        'illustration_count'  => $seriesIllustrationCount
+        'illustration_count'  => $seriesIllustrationCount,
+        'story_arc_count'     => count($storyArcs),
     ];
 
     if ($isTargetedBuild) {
@@ -1191,6 +1477,7 @@ foreach ($narrativeDirs as $narrativeDir) {
         $newRouteData['common']['ebook_sizes'] = $ebookSizes;
         $newRouteData['common']['illustration_count'] = $seriesIllustrationCount;
         $newRouteData['common']['word_stats'] = $seriesWordStats;
+        $newRouteData['common']['story_arcs'] = $storyArcs;
 
         foreach ($routeData as $key => $val) {
             if ($key === 'common') continue;
@@ -1230,11 +1517,13 @@ foreach ($narrativeDirs as $narrativeDir) {
             'ebook_sizes' => $ebookSizes,
             'illustration_count' => $seriesIllustrationCount,
             'word_stats' => $seriesWordStats,
+            'story_arcs' => $storyArcs,
             'eras' => $tocBooks
         ];
         $tocDestFile = $assetDestDir . '/' . $seriesSlug . '/toc.json';
         file_put_contents($tocDestFile, json_encode($generatedToc, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-        echo "  [Assets] Saved auto-discovered Table of Contents (with {$seriesIllustrationCount} illustrations, " . number_format($seriesStoryWordCount) . " story words & eBook sizes) to toc.json\n";
+        $arcLogNote = count($storyArcs) > 0 ? (", " . count($storyArcs) . " story arcs") : '';
+        echo "  [Assets] Saved auto-discovered Table of Contents (with {$seriesIllustrationCount} illustrations{$arcLogNote}, " . number_format($seriesStoryWordCount) . " story words & eBook sizes) to toc.json\n";
 
         // Package the book's toc.json, ovab.json, landing.md, and e* Markdown tree into <slug>-package.7z
         buildSeriesSevenZipPackage($seriesAssetDir, $seriesSlug);
@@ -1259,6 +1548,8 @@ foreach ($narrativeDirs as $narrativeDir) {
         'hide' => isset($seriesMeta['hide']) ? $seriesMeta['hide'] : false,
         'ebook_sizes' => $ebookSizes,
         'illustration_count' => $seriesIllustrationCount,
+        'story_arc_count' => count($storyArcs),
+        'story_arcs' => $storyArcSummaries,
         'word_stats' => $seriesWordStats
     ];
 }
@@ -1406,6 +1697,22 @@ echo "  [Stats] Live Library Word Count & Scale Telemetry (" . number_format($to
 $ebookSizesManifestFile = $booksAppDir . '/data/ebook-sizes.json';
 file_put_contents($ebookSizesManifestFile, json_encode($allEbookSizes, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 echo "  [Sizes] eBook file sizes manifest saved to: {$ebookSizesManifestFile}\n";
+
+// Write the global Story Arcs (Reading Playlists) manifest for books.raggiesoft.com, Backstage, and native apps
+$storyArcsPayload = [
+    'generated_at' => gmdate('c'),
+    'arc_count'    => count($globalStoryArcs),
+    'book_count'   => count(array_unique(array_column($globalStoryArcs, 'series_slug'))),
+    'arcs'         => $globalStoryArcs,
+];
+$storyArcsJson = json_encode($storyArcsPayload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+$storyArcsLocalFile = $booksAppDir . '/data/story-arcs.json';
+$storyArcsCdnFile   = $assetDestDir . '/../json/story-arcs.json';
+file_put_contents($storyArcsLocalFile, $storyArcsJson);
+if (is_dir(dirname($storyArcsCdnFile))) {
+    file_put_contents($storyArcsCdnFile, $storyArcsJson);
+}
+echo "  [Arcs] Compiled " . count($globalStoryArcs) . " Story Arc playlists saved to: {$storyArcsLocalFile}\n";
 
 // --- STEP B: COMPILE THE LISTENING ROOM (music.raggiesoft.com) HOVERCARD PREVIEWS ---
 // Populate $allLinkPreviews with rich artist, album, track, and playlist entries from
@@ -1872,6 +2179,7 @@ if (is_dir($booksSubdomainDir)) {
     $editorialRouteDefs = [
         '/'              => ['files' => [$booksSubdomainDir . '/sophia/home.php'],              'withCatalog' => true],
         '/library'       => ['files' => [$booksSubdomainDir . '/sophia/catalog.php'],           'withCatalog' => true],
+        '/arcs'          => ['files' => [$booksSubdomainDir . '/sophia/story-arcs.php'],        'withCatalog' => true],
         '/illustrations' => ['files' => [$booksSubdomainDir . '/sophia/all-illustrations.php'], 'withCatalog' => true],
         '/stats'         => ['files' => [$booksSubdomainDir . '/sophia/stats.php'],             'withCatalog' => true],
         '/knox'          => ['files' => [$booksSubdomainDir . '/sophia/knox.php'],              'withCatalog' => false],
