@@ -142,6 +142,9 @@ function rcopy($src, $dst) {
         if (!is_dir($dst)) mkdir($dst, 0755, true);
         $files = array_diff(scandir($src), ['.', '..']);
         foreach ($files as $file) {
+            if (strcasecmp($file, 'BRANCH-CANON.md') === 0 || $file === '.DS_Store') {
+                continue;
+            }
             rcopy("$src/$file", "$dst/$file");
         }
     } else if (file_exists($src)) {
@@ -774,440 +777,1024 @@ foreach ($narrativeDirs as $narrativeDir) {
     $seriesChapCountTotal = 0;
     $seriesPartCountTotal = 0;
     $seriesPartAbsPaths   = [];
-    // Lookup table mapping relative part file paths (`e010/c001/p002.md`) to compiled TOC metadata for `arcs.json`
+    // Lookup table mapping relative part file paths (`e010/c001/p002.md`) to compiled TOC metadata for `arcs.json` & `crossroads.json`
     $seriesPartsByRelPath = [];
 
-    // Auto-discover Era directories strictly based on 'e*' naming convention
-    $bDirs = glob($narrativeDir . '/e*', GLOB_ONLYDIR);
-    sort($bDirs); // Ensure sequential processing
+    /**
+     * Reusable Era/Chapter/Part Directory Compiler (`$compileEraTree`)
+     * -------------------------------------------------------------------------
+     * Scans any root directory containing `e*` -> `c*` -> `p*.md` folders—used
+     * both for the primary novel root (`books/<slug>/e*`) and for coequal
+     * Story Crossroads path trees (`books/<slug>/paths/<path-id>/e*`).
+     *
+     * Automatically registers all Era TOC, Chapter TOC, and Part reader routes,
+     * indexes full-text search entries and hovercard link previews, and marks
+     * every `.md` part in `$seriesPartAbsPaths` so Story Crossroads chapters
+     * are counted strictly as readable story prose rather than internal lore.
+     */
+    $compileEraTree = function (
+        string $scanRootDir,
+        string $routePrefix,
+        ?string $pathId = null,
+        ?string $crossroadsId = null
+    ) use (
+        &$routeData,
+        &$seriesIllustrationCount,
+        &$seriesStoryWordCount,
+        &$seriesChapCountTotal,
+        &$seriesPartCountTotal,
+        &$seriesPartAbsPaths,
+        &$seriesPartsByRelPath,
+        &$allLinkPreviews,
+        &$searchIndex,
+        &$firstRouteUrl,
+        &$lastRouteUrl,
+        $narrativeDir,
+        $seriesSlug,
+        $seriesTitle,
+        $seriesMeta,
+        $serverRoot
+    ): array {
+        $compiledEras = [];
+        $bDirs = glob($scanRootDir . '/e*', GLOB_ONLYDIR) ?: [];
+        sort($bDirs); // Ensure sequential processing
 
-    foreach ($bDirs as $bIndex => $bDir) {
-        $bName = basename($bDir);
-        $eraNum = intval(str_replace('e', '', $bName));
+        foreach ($bDirs as $bIndex => $bDir) {
+            $bName = basename($bDir);
+            $eraNum = intval(str_replace('e', '', $bName));
 
-        $eraTitle = "Era {$eraNum}";
-        $metaPath = $bDir . '/ovab.json';
+            $eraTitle = "Era {$eraNum}";
+            $metaPath = $bDir . '/ovab.json';
 
-        // Load local ovab.json title
-        if (file_exists($metaPath)) {
-            $meta = json_decode(file_get_contents($metaPath), true);
-            if (isset($meta['title'])) $eraTitle = $meta['title'];
-        }
-        $eraSlug = slugify(strip_tags($eraTitle));
-
-        // Register the era's TOC route
-        $eraRouteUrl = "/raggiesoft-books/books/{$seriesSlug}/{$eraSlug}";
-        $routeData[$eraRouteUrl] = [
-            "view" => "pages/raggiesoft-books/books/viewer",
-            "title" => $eraTitle,
-            "theme" => "raggiesoft-books",
-            "filePath" => "__ERA_TOC__|{$bIndex}"
-        ];
-
-        // Track structure for the auto-generated TOC
-        $eraIllustrationCount = 0;
-        $eraWordCount = 0;
-        $tocEra = [
-            'era_num' => $eraNum,
-            'era_title' => $eraTitle,
-            'era_url' => $eraRouteUrl,
-            'illustration_count' => 0,
-            'word_count' => 0,
-            'chapters' => []
-        ];
-
-        // Auto-discover chapter directories based on 'c*' naming convention
-        $cDirs = glob($bDir . '/c*', GLOB_ONLYDIR);
-        sort($cDirs);
-
-        foreach ($cDirs as $cIndex => $cDir) {
-            $seriesChapCountTotal++;
-            $cName = basename($cDir);
-            $chapNum = intval(str_replace('c', '', $cName));
-
-            $chapTitle = "Chapter {$chapNum}";
-            $metaPath = $cDir . '/ovab.json';
-
-            // Resolve chapter title from local ovab.json
+            // Load local ovab.json title
             if (file_exists($metaPath)) {
                 $meta = json_decode(file_get_contents($metaPath), true);
-                if (isset($meta['title'])) $chapTitle = $meta['title'];
+                if (isset($meta['title'])) $eraTitle = $meta['title'];
             }
-            $chapSlug = slugify(strip_tags($chapTitle));
+            $eraSlug = slugify(strip_tags($eraTitle));
 
-            // Register the chapter's TOC route
-            $chapRouteUrl = "/raggiesoft-books/books/{$seriesSlug}/{$eraSlug}/{$chapSlug}";
-            $routeData[$chapRouteUrl] = [
+            // Register the era's TOC route (`__ERA_TOC__|<bIndex>` for root, `__ERA_TOC__|<pathId>|<bIndex>` for Story Crossroads paths)
+            $eraRouteUrl = "{$routePrefix}/{$eraSlug}";
+            $eraFileToken = ($pathId !== null && $pathId !== '')
+                ? "__ERA_TOC__|{$pathId}|{$bIndex}"
+                : "__ERA_TOC__|{$bIndex}";
+            $eraRouteCfg = [
                 "view" => "pages/raggiesoft-books/books/viewer",
-                "title" => $chapTitle,
+                "title" => $eraTitle,
                 "theme" => "raggiesoft-books",
-                "filePath" => "__CHAP_TOC__|{$bIndex}|{$cIndex}"
+                "filePath" => $eraFileToken
             ];
+            if ($pathId !== null && $pathId !== '') {
+                $eraRouteCfg['pathId'] = $pathId;
+            }
+            if ($crossroadsId !== null && $crossroadsId !== '') {
+                $eraRouteCfg['crossroadsId'] = $crossroadsId;
+            }
+            $routeData[$eraRouteUrl] = $eraRouteCfg;
 
-            // Track structure for auto-generated TOC (`parts` array inside each chapter)
-            $chapIllustrationCount = 0;
-            $chapWordCount = 0;
-            $tocChap = [
-                'chap_num' => $chapNum,
-                'chap_title' => $chapTitle,
-                'chap_url' => $chapRouteUrl,
+            // Track structure for the auto-generated TOC
+            $eraIllustrationCount = 0;
+            $eraWordCount = 0;
+            $tocEra = [
+                'era_num' => $eraNum,
+                'era_title' => $eraTitle,
+                'era_url' => $eraRouteUrl,
                 'illustration_count' => 0,
                 'word_count' => 0,
-                'parts' => []
+                'chapters' => []
             ];
+            if ($pathId !== null && $pathId !== '') {
+                $tocEra['path_id'] = $pathId;
+            }
 
-            // Auto-discover individual part markdown files strictly based on 'p*.md'
-            $pFiles = glob($cDir . '/p*.md');
-            sort($pFiles);
-            $chapPartCount = count($pFiles);
+            // Auto-discover chapter directories based on 'c*' naming convention
+            $cDirs = glob($bDir . '/c*', GLOB_ONLYDIR) ?: [];
+            sort($cDirs);
 
-            foreach ($pFiles as $pIndex => $pFile) {
-                $pName = basename($pFile);
-                $partNum = intval(str_replace(['p', '.md'], '', $pName));
+            foreach ($cDirs as $cIndex => $cDir) {
+                $seriesChapCountTotal++;
+                $cName = basename($cDir);
+                $chapNum = intval(str_replace('c', '', $cName));
 
-                $yamlTitle = "Part {$partNum}";
-                $partDate = '';
-                $partStardate = '';
-                $partRealmTime = '';
-                $partStartTime = '';
-                $partLocation = '';
-                $partSummary = '';
-                $partImages = [];
-                $partBackstageSlugs = [];
-                $partContent = file_get_contents($pFile);
-                $bodyWithoutFrontmatter = $partContent;
+                $chapTitle = "Chapter {$chapNum}";
+                $metaPath = $cDir . '/ovab.json';
 
-                // Extract title, scene metadata, and illustrations from part's YAML frontmatter
-                if (preg_match('/^---([\s\S]*?)---/', ltrim($partContent), $matches)) {
-                    $frontmatterRaw = $matches[1];
-                    $bodyWithoutFrontmatter = str_replace($matches[0], '', $partContent);
-                    // Parse YAML title safely even if the string contains escaped double quotes (\"...\")
-                    if (preg_match('/^title:\s*(.+)$/m', $frontmatterRaw, $m)) {
-                        $extractedTitle = trim($m[1]);
-                        if ((str_starts_with($extractedTitle, '"') && str_ends_with($extractedTitle, '"')) ||
-                            (str_starts_with($extractedTitle, "'") && str_ends_with($extractedTitle, "'"))) {
-                            $extractedTitle = substr($extractedTitle, 1, -1);
-                        }
-                        $extractedTitle = trim(str_replace('\"', '"', $extractedTitle));
-                        // Strip any redundant leading "Part X:" prefix from YAML `title:` so
-                        // multi-part chapters never render "Part X: Part X: <Title>".
-                        $extractedTitle = trim((string)preg_replace('/^(?:Part\s+\d+\s*:\s*)+/i', '', $extractedTitle));
-                        if ($extractedTitle !== '' && strcasecmp($extractedTitle, 'Untitled Chapter') !== 0 && strcasecmp($extractedTitle, 'Untitled') !== 0) {
-                            $yamlTitle = $extractedTitle;
-                        } elseif ($chapPartCount === 1) {
-                            $yamlTitle = preg_replace('/^Chapter\s+\d+:\s*/i', '', $chapTitle);
-                        }
-                    }
-                    if (preg_match('/^date:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mDate)) {
-                        $partDate = trim($mDate[1], " \t\n\r\0\x0B\"'");
-                    }
-                    if (preg_match('/^stardate:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mStardate)) {
-                        $partStardate = trim($mStardate[1], " \t\n\r\0\x0B\"'");
-                    }
-                    if (preg_match('/^realm_time:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mRealmTime)) {
-                        $partRealmTime = trim($mRealmTime[1], " \t\n\r\0\x0B\"'");
-                    }
-                    if (preg_match('/^start_time:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mTime)) {
-                        $partStartTime = trim($mTime[1], " \t\n\r\0\x0B\"'");
-                    }
-                    if (preg_match('/^location:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mLoc)) {
-                        $partLocation = trim($mLoc[1], " \t\n\r\0\x0B\"'");
-                    }
-                    if (preg_match('/^(?:og_description|summary):\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mSum)) {
-                        $partSummary = trim($mSum[1], " \t\n\r\0\x0B\"'");
-                    }
-
-                    // Parse frontmatter `image:` / `images:` and `image_alt:` / `image_alts:` (scalar or YAML list)
-                    $fmImageUrls = [];
-                    $fmImageAlts = [];
-                    $fmLines = preg_split('/\r\n|\r|\n/', $frontmatterRaw);
-                    $currentListKey = null;
-                    foreach ($fmLines as $fmLine) {
-                        if (preg_match('/^([a-zA-Z0-9_-]+):\s*(.*)$/', $fmLine, $kvMatch)) {
-                            $k = strtolower(trim($kvMatch[1]));
-                            $v = trim($kvMatch[2]);
-                            $currentListKey = null;
-                            if ($k === 'image' || $k === 'images') {
-                                if ($v === '') {
-                                    $currentListKey = 'image';
-                                } else {
-                                    $cleanVal = trim($v, "\"'");
-                                    if ($cleanVal !== '') $fmImageUrls[] = $cleanVal;
-                                }
-                            } elseif ($k === 'image_alt' || $k === 'image_alts') {
-                                if ($v === '') {
-                                    $currentListKey = 'image_alt';
-                                } else {
-                                    $cleanVal = trim($v, "\"'");
-                                    if ($cleanVal !== '') $fmImageAlts[] = $cleanVal;
-                                }
-                            } elseif ($k === 'backstage') {
-                                if ($v === '') {
-                                    $currentListKey = 'backstage';
-                                } else {
-                                    $cleanVal = trim($v, "/ \t\"'");
-                                    if ($cleanVal !== '') $partBackstageSlugs[] = $cleanVal;
-                                }
-                            }
-                        } elseif ($currentListKey !== null && preg_match('/^\s*-\s+(.*)$/', $fmLine, $listMatch)) {
-                            $itemVal = trim($listMatch[1], " \t\"'");
-                            if ($itemVal !== '') {
-                                if ($currentListKey === 'image') {
-                                    $fmImageUrls[] = $itemVal;
-                                } elseif ($currentListKey === 'image_alt') {
-                                    $fmImageAlts[] = $itemVal;
-                                } elseif ($currentListKey === 'backstage') {
-                                    $cleanBs = trim($itemVal, "/ \t\"'");
-                                    if ($cleanBs !== '') $partBackstageSlugs[] = $cleanBs;
-                                }
-                            }
-                        } elseif (preg_match('/^\S/', $fmLine)) {
-                            $currentListKey = null;
-                        }
-                    }
-
-                    foreach ($fmImageUrls as $idx => $imgUrl) {
-                        $normSrc = preg_replace('/#.*$/', '', str_replace(['{{CDN}}', '{{cms}}', 'https://assets.raggiesoft.com'], '', trim($imgUrl)));
-                        $cleanRel = ltrim($normSrc, '/');
-                        if ($cleanRel !== '' && strpos($cleanRel, 'raggiesoft-books/') !== 0 && strpos($cleanRel, 'raggiesoft-lore/') !== 0 && strpos($cleanRel, 'engine-room-records/') !== 0 && strpos($cleanRel, 'stardust-engine/images/') !== 0) {
-                            $cleanRel = 'raggiesoft-books/images/scenes/' . preg_replace('#^scenes/#', '', $cleanRel);
-                        }
-                        $normSrc = '/' . $cleanRel;
-                        if ($normSrc !== '/' && is_file($serverRoot . '/raggiesoft-assets' . $normSrc)) {
-                            $partImages[] = [
-                                'src' => $normSrc,
-                                'alt' => $fmImageAlts[$idx] ?? ($fmImageAlts[0] ?? '')
-                            ];
-                        }
-                    }
+                // Resolve chapter title from local ovab.json
+                if (file_exists($metaPath)) {
+                    $meta = json_decode(file_get_contents($metaPath), true);
+                    if (isset($meta['title'])) $chapTitle = $meta['title'];
                 }
+                $chapSlug = slugify(strip_tags($chapTitle));
 
-                // Also discover any inline Markdown images (`![alt](url)`) inside the scene body
-                if (preg_match_all('/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/', $bodyWithoutFrontmatter, $inlineImgMatches, PREG_SET_ORDER)) {
-                    $seenSrcs = array_column($partImages, 'src');
-                    foreach ($inlineImgMatches as $inlineMatch) {
-                        $inlineAlt = trim($inlineMatch[1]);
-                        $inlineSrc = trim($inlineMatch[2]);
-                        $normInlineSrc = preg_replace('/#.*$/', '', str_replace(['{{CDN}}', '{{cms}}', 'https://assets.raggiesoft.com'], '', $inlineSrc));
-                        $cleanInlineRel = ltrim($normInlineSrc, '/');
-                        if ($cleanInlineRel !== '' && strpos($cleanInlineRel, 'raggiesoft-books/') !== 0 && strpos($cleanInlineRel, 'raggiesoft-lore/') !== 0 && strpos($cleanInlineRel, 'engine-room-records/') !== 0) {
-                            $cleanInlineRel = 'raggiesoft-books/images/scenes/' . $cleanInlineRel;
-                        }
-                        $normInlineSrc = '/' . $cleanInlineRel;
-                        if ($normInlineSrc !== '/' && !in_array($normInlineSrc, $seenSrcs, true) && is_file($serverRoot . '/raggiesoft-assets' . $normInlineSrc)) {
-                            $partImages[] = [
-                                'src' => $normInlineSrc,
-                                'alt' => $inlineAlt
-                            ];
-                            $seenSrcs[] = $normInlineSrc;
-                        }
-                    }
-                }
-
-                // Smart Polish (Option 1 + Idea 3):
-                // - When a Chapter has 2+ Parts, display "Part X: <Title>".
-                // - When a Chapter has only 1 Part, omit the redundant "Part 1:" prefix.
-                $partTitle = ($chapPartCount > 1)
-                    ? "Part {$partNum}: {$yamlTitle}"
-                    : $yamlTitle;
-                $partSlug = slugify(strip_tags($partTitle));
-
-                // Construct final content route
-                $routeUrl = "/raggiesoft-books/books/{$seriesSlug}/{$eraSlug}/{$chapSlug}/{$partSlug}";
-                if ($firstRouteUrl === null) {
-                    $firstRouteUrl = $routeUrl; // Capture the very first reading route
-                }
-
-                $relPath = str_replace($narrativeDir . '/', '', $pFile);
-                $routeData[$routeUrl] = [
+                // Register the chapter's TOC route
+                $chapRouteUrl = "{$eraRouteUrl}/{$chapSlug}";
+                $chapFileToken = ($pathId !== null && $pathId !== '')
+                    ? "__CHAP_TOC__|{$pathId}|{$bIndex}|{$cIndex}"
+                    : "__CHAP_TOC__|{$bIndex}|{$cIndex}";
+                $chapRouteCfg = [
                     "view" => "pages/raggiesoft-books/books/viewer",
-                    "title" => $partTitle,
+                    "title" => $chapTitle,
                     "theme" => "raggiesoft-books",
-                    "filePath" => $relPath
+                    "filePath" => $chapFileToken
                 ];
-                // Architectural SEO Note:
-                // Single-part chapters use the clean canonical slug (`/<partSlug>`) without a
-                // redundant `part-1-` prefix. Legacy `/part-1-<partSlug>` bookmarks are permanently
-                // 301-redirected by `eleanor/isabel.php` rather than duplicated inside `$routeData`,
-                // ensuring `$fileToUrl`, sequential Prev/Next navigation, and XML sitemaps emit
-                // strictly one canonical URL per manuscript part.
-                $lastRouteUrl = $routeUrl; // Continually update to capture the very last part
+                if ($pathId !== null && $pathId !== '') {
+                    $chapRouteCfg['pathId'] = $pathId;
+                }
+                if ($crossroadsId !== null && $crossroadsId !== '') {
+                    $chapRouteCfg['crossroadsId'] = $crossroadsId;
+                }
+                $routeData[$chapRouteUrl] = $chapRouteCfg;
 
-                $partImgCount = count($partImages);
-                $chapIllustrationCount += $partImgCount;
-                $eraIllustrationCount += $partImgCount;
-                $seriesIllustrationCount += $partImgCount;
+                // Track structure for auto-generated TOC (`parts` array inside each chapter)
+                $chapIllustrationCount = 0;
+                $chapWordCount = 0;
+                $tocChap = [
+                    'chap_num' => $chapNum,
+                    'chap_title' => $chapTitle,
+                    'chap_url' => $chapRouteUrl,
+                    'illustration_count' => 0,
+                    'word_count' => 0,
+                    'parts' => []
+                ];
+                if ($pathId !== null && $pathId !== '') {
+                    $tocChap['path_id'] = $pathId;
+                }
 
-                // Clean the part body text and add to the full-text search index
-                $cleanBody = strip_tags($bodyWithoutFrontmatter);
-                $cleanBody = preg_replace('/[#_*\[\]>]/', '', $cleanBody);
-                $cleanBody = preg_replace('/\s+/', ' ', $cleanBody);
-                $cleanBody = trim($cleanBody);
+                // Auto-discover individual part markdown files strictly based on 'p*.md'
+                $pFiles = glob($cDir . '/p*.md') ?: [];
+                sort($pFiles);
+                $chapPartCount = count($pFiles);
 
-                // Extract a clean 1-2 sentence excerpt (~210 characters) for Wikipedia-style hovercard previews
-                $partExcerpt = $partSummary;
-                if ($partExcerpt === '') {
-                    $proseBody = preg_replace('/!\[[^\]]*\]\([^)]*\)/', '', $bodyWithoutFrontmatter);
-                    $proseBody = preg_replace('/\[([^\]]+)\]\([^)]*\)/', '$1', $proseBody);
-                    $proseBody = preg_replace('/^#+\s+.*$/m', '', $proseBody);
-                    $proseBody = preg_replace('/^---+\s*$/m', '', $proseBody);
-                    $proseBody = strip_tags($proseBody);
-                    $proseBody = preg_replace('/[*_`~>]/', '', $proseBody);
-                    $proseBody = trim(preg_replace('/\s+/', ' ', $proseBody));
-                    if (mb_strlen($proseBody) > 215) {
-                        $cut = mb_substr($proseBody, 0, 212);
-                        $lastSpace = mb_strrpos($cut, ' ');
-                        if ($lastSpace !== false && $lastSpace > 140) {
-                            $cut = mb_substr($cut, 0, $lastSpace);
+                foreach ($pFiles as $pIndex => $pFile) {
+                    $pName = basename($pFile);
+                    $partNum = intval(str_replace(['p', '.md'], '', $pName));
+
+                    $yamlTitle = "Part {$partNum}";
+                    $partDate = '';
+                    $partStardate = '';
+                    $partRealmTime = '';
+                    $partStartTime = '';
+                    $partLocation = '';
+                    $partSummary = '';
+                    $partImages = [];
+                    $partBackstageSlugs = [];
+                    $partContent = file_get_contents($pFile);
+                    $bodyWithoutFrontmatter = $partContent;
+
+                    // Extract title, scene metadata, and illustrations from part's YAML frontmatter
+                    if (preg_match('/^---([\s\S]*?)---/', ltrim($partContent), $matches)) {
+                        $frontmatterRaw = $matches[1];
+                        $bodyWithoutFrontmatter = str_replace($matches[0], '', $partContent);
+                        // Parse YAML title safely even if the string contains escaped double quotes (\"...\")
+                        if (preg_match('/^title:\s*(.+)$/m', $frontmatterRaw, $m)) {
+                            $extractedTitle = trim($m[1]);
+                            if ((str_starts_with($extractedTitle, '"') && str_ends_with($extractedTitle, '"')) ||
+                                (str_starts_with($extractedTitle, "'") && str_ends_with($extractedTitle, "'"))) {
+                                $extractedTitle = substr($extractedTitle, 1, -1);
+                            }
+                            $extractedTitle = trim(str_replace('\"', '"', $extractedTitle));
+                            // Strip any redundant leading "Part X:" prefix from YAML `title:` so
+                            // multi-part chapters never render "Part X: Part X: <Title>".
+                            $extractedTitle = trim((string)preg_replace('/^(?:Part\s+\d+\s*:\s*)+/i', '', $extractedTitle));
+                            if ($extractedTitle !== '' && strcasecmp($extractedTitle, 'Untitled Chapter') !== 0 && strcasecmp($extractedTitle, 'Untitled') !== 0) {
+                                $yamlTitle = $extractedTitle;
+                            } elseif ($chapPartCount === 1 && $partNum === 1) {
+                                $yamlTitle = preg_replace('/^Chapter\s+\d+:\s*/i', '', $chapTitle);
+                            }
                         }
-                        $partExcerpt = rtrim($cut, " \t\n\r\0\x0B.,;:-—") . '…';
-                    } else {
-                        $partExcerpt = $proseBody;
+                        if (preg_match('/^date:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mDate)) {
+                            $partDate = trim($mDate[1], " \t\n\r\0\x0B\"'");
+                        }
+                        if (preg_match('/^stardate:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mStardate)) {
+                            $partStardate = trim($mStardate[1], " \t\n\r\0\x0B\"'");
+                        }
+                        if (preg_match('/^realm_time:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mRealmTime)) {
+                            $partRealmTime = trim($mRealmTime[1], " \t\n\r\0\x0B\"'");
+                        }
+                        if (preg_match('/^start_time:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mTime)) {
+                            $partStartTime = trim($mTime[1], " \t\n\r\0\x0B\"'");
+                        }
+                        if (preg_match('/^location:\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mLoc)) {
+                            $partLocation = trim($mLoc[1], " \t\n\r\0\x0B\"'");
+                        }
+                        if (preg_match('/^(?:og_description|summary):\s*"?([^"\r\n]+)"?/m', $frontmatterRaw, $mSum)) {
+                            $partSummary = trim($mSum[1], " \t\n\r\0\x0B\"'");
+                        }
+
+                        // Parse frontmatter `image:` / `images:` and `image_alt:` / `image_alts:` (scalar or YAML list)
+                        $fmImageUrls = [];
+                        $fmImageAlts = [];
+                        $fmLines = preg_split('/\r\n|\r|\n/', $frontmatterRaw);
+                        $currentListKey = null;
+                        foreach ($fmLines as $fmLine) {
+                            if (preg_match('/^([a-zA-Z0-9_-]+):\s*(.*)$/', $fmLine, $kvMatch)) {
+                                $k = strtolower(trim($kvMatch[1]));
+                                $v = trim($kvMatch[2]);
+                                $currentListKey = null;
+                                if ($k === 'image' || $k === 'images') {
+                                    if ($v === '') {
+                                        $currentListKey = 'image';
+                                    } else {
+                                        $cleanVal = trim($v, "\"'");
+                                        if ($cleanVal !== '') $fmImageUrls[] = $cleanVal;
+                                    }
+                                } elseif ($k === 'image_alt' || $k === 'image_alts') {
+                                    if ($v === '') {
+                                        $currentListKey = 'image_alt';
+                                    } else {
+                                        $cleanVal = trim($v, "\"'");
+                                        if ($cleanVal !== '') $fmImageAlts[] = $cleanVal;
+                                    }
+                                } elseif ($k === 'backstage') {
+                                    if ($v === '') {
+                                        $currentListKey = 'backstage';
+                                    } else {
+                                        $cleanVal = trim($v, "/ \t\"'");
+                                        if ($cleanVal !== '') $partBackstageSlugs[] = $cleanVal;
+                                    }
+                                }
+                            } elseif ($currentListKey !== null && preg_match('/^\s*-\s+(.*)$/', $fmLine, $listMatch)) {
+                                $itemVal = trim($listMatch[1], " \t\"'");
+                                if ($itemVal !== '') {
+                                    if ($currentListKey === 'image') {
+                                        $fmImageUrls[] = $itemVal;
+                                    } elseif ($currentListKey === 'image_alt') {
+                                        $fmImageAlts[] = $itemVal;
+                                    } elseif ($currentListKey === 'backstage') {
+                                        $cleanBs = trim($itemVal, "/ \t\"'");
+                                        if ($cleanBs !== '') $partBackstageSlugs[] = $cleanBs;
+                                    }
+                                }
+                            } elseif (preg_match('/^\S/', $fmLine)) {
+                                $currentListKey = null;
+                            }
+                        }
+
+                        foreach ($fmImageUrls as $idx => $imgUrl) {
+                            $normSrc = preg_replace('/#.*$/', '', str_replace(['{{CDN}}', '{{cms}}', 'https://assets.raggiesoft.com'], '', trim($imgUrl)));
+                            $cleanRel = ltrim($normSrc, '/');
+                            if ($cleanRel !== '' && strpos($cleanRel, 'raggiesoft-books/') !== 0 && strpos($cleanRel, 'raggiesoft-lore/') !== 0 && strpos($cleanRel, 'engine-room-records/') !== 0 && strpos($cleanRel, 'stardust-engine/images/') !== 0) {
+                                $cleanRel = 'raggiesoft-books/images/scenes/' . preg_replace('#^scenes/#', '', $cleanRel);
+                            }
+                            $normSrc = '/' . $cleanRel;
+                            if ($normSrc !== '/' && is_file($serverRoot . '/raggiesoft-assets' . $normSrc)) {
+                                $partImages[] = [
+                                    'src' => $normSrc,
+                                    'alt' => $fmImageAlts[$idx] ?? ($fmImageAlts[0] ?? '')
+                                ];
+                            }
+                        }
+                    }
+
+                    // Also discover any inline Markdown images (`![alt](url)`) inside the scene body
+                    if (preg_match_all('/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/', $bodyWithoutFrontmatter, $inlineImgMatches, PREG_SET_ORDER)) {
+                        $seenSrcs = array_column($partImages, 'src');
+                        foreach ($inlineImgMatches as $inlineMatch) {
+                            $inlineAlt = trim($inlineMatch[1]);
+                            $inlineSrc = trim($inlineMatch[2]);
+                            $normInlineSrc = preg_replace('/#.*$/', '', str_replace(['{{CDN}}', '{{cms}}', 'https://assets.raggiesoft.com'], '', $inlineSrc));
+                            $cleanInlineRel = ltrim($normInlineSrc, '/');
+                            if ($cleanInlineRel !== '' && strpos($cleanInlineRel, 'raggiesoft-books/') !== 0 && strpos($cleanInlineRel, 'raggiesoft-lore/') !== 0 && strpos($cleanInlineRel, 'engine-room-records/') !== 0) {
+                                $cleanInlineRel = 'raggiesoft-books/images/scenes/' . $cleanInlineRel;
+                            }
+                            $normInlineSrc = '/' . $cleanInlineRel;
+                            if ($normInlineSrc !== '/' && !in_array($normInlineSrc, $seenSrcs, true) && is_file($serverRoot . '/raggiesoft-assets' . $normInlineSrc)) {
+                                $partImages[] = [
+                                    'src' => $normInlineSrc,
+                                    'alt' => $inlineAlt
+                                ];
+                                $seenSrcs[] = $normInlineSrc;
+                            }
+                        }
+                    }
+
+                    // Smart Polish (Option 1 + Idea 3):
+                    // - When a Chapter has 2+ Parts (or explicit Part > 1), display "Part X: <Title>".
+                    // - When a Chapter has only 1 Part (`p001.md`), omit the redundant "Part 1:" prefix.
+                    $partTitle = ($chapPartCount > 1 || $partNum > 1)
+                        ? "Part {$partNum}: {$yamlTitle}"
+                        : $yamlTitle;
+                    $partSlug = slugify(strip_tags($partTitle));
+
+                    // Construct final content route
+                    $routeUrl = "{$chapRouteUrl}/{$partSlug}";
+                    if ($pathId === null && $firstRouteUrl === null) {
+                        $firstRouteUrl = $routeUrl; // Capture the very first reading route of the shared trunk
+                    }
+
+                    $relPath = str_replace($narrativeDir . '/', '', $pFile);
+                    $partRouteCfg = [
+                        "view" => "pages/raggiesoft-books/books/viewer",
+                        "title" => $partTitle,
+                        "theme" => "raggiesoft-books",
+                        "filePath" => $relPath
+                    ];
+                    if ($pathId !== null && $pathId !== '') {
+                        $partRouteCfg['pathId'] = $pathId;
+                    }
+                    if ($crossroadsId !== null && $crossroadsId !== '') {
+                        $partRouteCfg['crossroadsId'] = $crossroadsId;
+                    }
+                    $routeData[$routeUrl] = $partRouteCfg;
+                    if ($pathId === null) {
+                        $lastRouteUrl = $routeUrl; // Continually update to capture the very last trunk/inline part
+                    }
+
+                    $partImgCount = count($partImages);
+                    $chapIllustrationCount += $partImgCount;
+                    $eraIllustrationCount += $partImgCount;
+                    $seriesIllustrationCount += $partImgCount;
+
+                    // Clean the part body text and add to the full-text search index
+                    $cleanBody = strip_tags($bodyWithoutFrontmatter);
+                    $cleanBody = preg_replace('/[#_*\[\]>]/', '', $cleanBody);
+                    $cleanBody = preg_replace('/\s+/', ' ', $cleanBody);
+                    $cleanBody = trim($cleanBody);
+
+                    // Extract a clean 1-2 sentence excerpt (~210 characters) for Wikipedia-style hovercard previews
+                    $partExcerpt = $partSummary;
+                    if ($partExcerpt === '') {
+                        $proseBody = preg_replace('/!\[[^\]]*\]\([^)]*\)/', '', $bodyWithoutFrontmatter);
+                        $proseBody = preg_replace('/\[([^\]]+)\]\([^)]*\)/', '$1', $proseBody);
+                        $proseBody = preg_replace('/^#+\s+.*$/m', '', $proseBody);
+                        $proseBody = preg_replace('/^---+\s*$/m', '', $proseBody);
+                        $proseBody = strip_tags($proseBody);
+                        $proseBody = preg_replace('/[*_`~>]/', '', $proseBody);
+                        $proseBody = trim(preg_replace('/\s+/', ' ', $proseBody));
+                        if (mb_strlen($proseBody) > 215) {
+                            $cut = mb_substr($proseBody, 0, 212);
+                            $lastSpace = mb_strrpos($cut, ' ');
+                            if ($lastSpace !== false && $lastSpace > 140) {
+                                $cut = mb_substr($cut, 0, $lastSpace);
+                            }
+                            $partExcerpt = rtrim($cut, " \t\n\r\0\x0B.,;:-—") . '…';
+                        } else {
+                            $partExcerpt = $proseBody;
+                        }
+                    }
+
+                    // Finalize TOC structure with parts, word count telemetry, and illustration manifest
+                    $seriesPartCountTotal++;
+                    $realPFile = realpath($pFile);
+                    if ($realPFile !== false) {
+                        $seriesPartAbsPaths[$realPFile] = true;
+                    }
+                    $partWordCount = countReadableProseWords($bodyWithoutFrontmatter, false);
+                    $partReadingMinutes = max(1, (int)ceil($partWordCount / 250));
+                    $chapWordCount += $partWordCount;
+                    $eraWordCount += $partWordCount;
+                    $seriesStoryWordCount += $partWordCount;
+
+                    $partStandaloneUrl = str_replace('/raggiesoft-books/books', '', $routeUrl);
+                    $partEntry = [
+                        'part_num' => $partNum,
+                        'part_title' => $partTitle,
+                        'file_path' => $relPath,
+                        'url' => $partStandaloneUrl,
+                        'word_count' => $partWordCount,
+                        'reading_minutes' => $partReadingMinutes
+                    ];
+                    if ($pathId !== null && $pathId !== '') {
+                        $partEntry['path_id'] = $pathId;
+                    }
+                    if ($partDate !== '') $partEntry['date'] = $partDate;
+                    if ($partStardate !== '') $partEntry['stardate'] = $partStardate;
+                    if ($partRealmTime !== '') $partEntry['realm_time'] = $partRealmTime;
+                    if ($partStartTime !== '') $partEntry['start_time'] = $partStartTime;
+                    if ($partLocation !== '') $partEntry['location'] = $partLocation;
+                    if ($partExcerpt !== '') $partEntry['excerpt'] = $partExcerpt;
+                    if ($partImgCount > 0) {
+                        $partEntry['image'] = $partImages[0]['src'];
+                        $partEntry['image_alt'] = $partImages[0]['alt'];
+                        $partEntry['images'] = $partImages;
+                        $partEntry['image_count'] = $partImgCount;
+                    }
+                    if (!empty($partBackstageSlugs)) {
+                        $partEntry['backstage'] = array_values(array_unique($partBackstageSlugs));
+                    }
+                    $tocChap['parts'][] = $partEntry;
+
+                    // Index compiled part metadata by relative path (`eXXX/cYYY/pZZZ.md` or `paths/<id>/...`)
+                    $seriesPartsByRelPath[$relPath] = [
+                        'part_num'        => $partNum,
+                        'part_title'      => $partTitle,
+                        'era_num'         => $eraNum,
+                        'era_title'       => $eraTitle,
+                        'chap_num'        => $chapNum,
+                        'chap_title'      => $chapTitle,
+                        'file_path'       => $relPath,
+                        'url'             => $partStandaloneUrl,
+                        'route_url'       => $routeUrl,
+                        'date'            => $partDate !== '' ? $partDate : ($partStardate !== '' ? "Stardate {$partStardate}" : $partRealmTime),
+                        'location'        => $partLocation,
+                        'excerpt'         => $partExcerpt,
+                        'image'           => ($partImgCount > 0) ? $partImages[0]['src'] : '',
+                        'word_count'      => $partWordCount,
+                        'reading_minutes' => $partReadingMinutes,
+                        'backstage'       => $partEntry['backstage'] ?? [],
+                    ];
+
+                    $defaultSeriesOgImg = '/raggiesoft-books/images/covers/og/' . $seriesSlug . '.jpg';
+                    $partPreviewImg = ($partImgCount > 0) ? $partImages[0]['src'] : $defaultSeriesOgImg;
+                    $partTimeBadge = $partDate !== '' ? $partDate : ($partStardate !== '' ? "Stardate {$partStardate}" : ($partRealmTime !== '' ? $partRealmTime : ''));
+                    $scenePreviewPayload = [
+                        'kind' => 'scene',
+                        'title' => $partTitle,
+                        'series' => $seriesTitle,
+                        'series_slug' => $seriesSlug,
+                        'kicker' => $seriesTitle . ' • ' . $chapTitle,
+                        'date' => $partTimeBadge,
+                        'location' => $partLocation,
+                        'image' => $partPreviewImg,
+                        'excerpt' => $partExcerpt,
+                        'url' => $partStandaloneUrl
+                    ];
+                    $allLinkPreviews[$partStandaloneUrl] = $scenePreviewPayload;
+                    if ($chapPartCount === 1 && $partNum === 1 && strpos($partSlug, 'part-1-') !== 0) {
+                        $allLinkPreviews[str_replace('/raggiesoft-books/books', '', "{$chapRouteUrl}/part-1-{$partSlug}")] = $scenePreviewPayload;
+                    }
+
+                    $searchIndex[] = [
+                        'series' => $seriesTitle,
+                        'book' => $eraTitle,
+                        'chapter' => $chapTitle,
+                        'title' => $partTitle,
+                        'url' => $routeUrl,
+                        'content' => $cleanBody
+                    ];
+                }
+                $tocChap['illustration_count'] = $chapIllustrationCount;
+                $tocChap['word_count'] = $chapWordCount;
+                $tocEra['chapters'][] = $tocChap;
+
+                // Register chapter-level preview card (inheriting first part's image & excerpt)
+                $chapStandaloneUrl = str_replace('/raggiesoft-books/books', '', $chapRouteUrl);
+                $firstChapPart = $tocChap['parts'][0] ?? null;
+                $chapPreviewImg = '/raggiesoft-books/images/covers/og/' . $seriesSlug . '.jpg';
+                foreach ($tocChap['parts'] as $cp) {
+                    if (!empty($cp['image'])) {
+                        $chapPreviewImg = $cp['image'];
+                        break;
                     }
                 }
-
-                // Finalize TOC structure with parts, word count telemetry, and illustration manifest
-                $seriesPartCountTotal++;
-                $realPFile = realpath($pFile);
-                if ($realPFile !== false) {
-                    $seriesPartAbsPaths[$realPFile] = true;
-                }
-                $partWordCount = countReadableProseWords($bodyWithoutFrontmatter, false);
-                $partReadingMinutes = max(1, (int)ceil($partWordCount / 250));
-                $chapWordCount += $partWordCount;
-                $eraWordCount += $partWordCount;
-                $seriesStoryWordCount += $partWordCount;
-
-                $partStandaloneUrl = str_replace('/raggiesoft-books/books', '', $routeUrl);
-                $partEntry = [
-                    'part_num' => $partNum,
-                    'part_title' => $partTitle,
-                    'file_path' => $relPath,
-                    'url' => $partStandaloneUrl,
-                    'word_count' => $partWordCount,
-                    'reading_minutes' => $partReadingMinutes
-                ];
-                if ($partDate !== '') $partEntry['date'] = $partDate;
-                if ($partStardate !== '') $partEntry['stardate'] = $partStardate;
-                if ($partRealmTime !== '') $partEntry['realm_time'] = $partRealmTime;
-                if ($partStartTime !== '') $partEntry['start_time'] = $partStartTime;
-                if ($partLocation !== '') $partEntry['location'] = $partLocation;
-                if ($partExcerpt !== '') $partEntry['excerpt'] = $partExcerpt;
-                if ($partImgCount > 0) {
-                    $partEntry['image'] = $partImages[0]['src'];
-                    $partEntry['image_alt'] = $partImages[0]['alt'];
-                    $partEntry['images'] = $partImages;
-                    $partEntry['image_count'] = $partImgCount;
-                }
-                if (!empty($partBackstageSlugs)) {
-                    $partEntry['backstage'] = array_values(array_unique($partBackstageSlugs));
-                }
-                $tocChap['parts'][] = $partEntry;
-
-                // Index compiled part metadata by relative path (`eXXX/cYYY/pZZZ.md`) for Story Arc compilation
-                $seriesPartsByRelPath[$relPath] = [
-                    'part_num'        => $partNum,
-                    'part_title'      => $partTitle,
-                    'era_num'         => $eraNum,
-                    'era_title'       => $eraTitle,
-                    'chap_num'        => $chapNum,
-                    'chap_title'      => $chapTitle,
-                    'file_path'       => $relPath,
-                    'url'             => $partStandaloneUrl,
-                    'date'            => $partDate !== '' ? $partDate : ($partStardate !== '' ? "Stardate {$partStardate}" : $partRealmTime),
-                    'location'        => $partLocation,
-                    'excerpt'         => $partExcerpt,
-                    'image'           => ($partImgCount > 0) ? $partImages[0]['src'] : '',
-                    'word_count'      => $partWordCount,
-                    'reading_minutes' => $partReadingMinutes,
-                    'backstage'       => $partEntry['backstage'] ?? [],
-                ];
-
-                $defaultSeriesOgImg = '/raggiesoft-books/images/covers/og/' . $seriesSlug . '.jpg';
-                $partPreviewImg = ($partImgCount > 0) ? $partImages[0]['src'] : $defaultSeriesOgImg;
-                $partTimeBadge = $partDate !== '' ? $partDate : ($partStardate !== '' ? "Stardate {$partStardate}" : ($partRealmTime !== '' ? $partRealmTime : ''));
-                $scenePreviewPayload = [
-                    'kind' => 'scene',
-                    'title' => $partTitle,
+                $allLinkPreviews[$chapStandaloneUrl] = [
+                    'kind' => 'chapter',
+                    'title' => $chapTitle,
                     'series' => $seriesTitle,
                     'series_slug' => $seriesSlug,
-                    'kicker' => $seriesTitle . ' • ' . $chapTitle,
-                    'date' => $partTimeBadge,
-                    'location' => $partLocation,
-                    'image' => $partPreviewImg,
-                    'excerpt' => $partExcerpt,
-                    'url' => $partStandaloneUrl
-                ];
-                $allLinkPreviews[$partStandaloneUrl] = $scenePreviewPayload;
-                if ($chapPartCount === 1 && strpos($partSlug, 'part-1-') !== 0) {
-                    $allLinkPreviews["/{$seriesSlug}/{$eraSlug}/{$chapSlug}/part-1-{$partSlug}"] = $scenePreviewPayload;
-                }
-
-                $searchIndex[] = [
-                    'series' => $seriesTitle,
-                    'book' => $eraTitle,
-                    'chapter' => $chapTitle,
-                    'title' => $partTitle,
-                    'url' => $routeUrl,
-                    'content' => $cleanBody
+                    'kicker' => $seriesTitle . ' • ' . $eraTitle,
+                    'date' => $firstChapPart['date'] ?? ($firstChapPart['stardate'] ?? ($firstChapPart['realm_time'] ?? '')),
+                    'location' => $firstChapPart['location'] ?? '',
+                    'image' => $chapPreviewImg,
+                    'excerpt' => $firstChapPart['excerpt'] ?? ($seriesMeta['series_short_description'] ?? ''),
+                    'url' => $chapStandaloneUrl
                 ];
             }
-            $tocChap['illustration_count'] = $chapIllustrationCount;
-            $tocChap['word_count'] = $chapWordCount;
-            $tocEra['chapters'][] = $tocChap;
+            $tocEra['illustration_count'] = $eraIllustrationCount;
+            $tocEra['word_count'] = $eraWordCount;
+            $compiledEras[] = $tocEra;
 
-            // Register chapter-level preview card (inheriting first part's image & excerpt)
-            $chapStandaloneUrl = str_replace('/raggiesoft-books/books', '', $chapRouteUrl);
-            $firstChapPart = $tocChap['parts'][0] ?? null;
-            $chapPreviewImg = '/raggiesoft-books/images/covers/og/' . $seriesSlug . '.jpg';
-            foreach ($tocChap['parts'] as $cp) {
-                if (!empty($cp['image'])) {
-                    $chapPreviewImg = $cp['image'];
+            // Register era-level preview card
+            $eraStandaloneUrl = str_replace('/raggiesoft-books/books', '', $eraRouteUrl);
+            $firstEraChap = $tocEra['chapters'][0] ?? null;
+            $firstEraPart = $firstEraChap['parts'][0] ?? null;
+            $eraPreviewImg = '/raggiesoft-books/images/covers/og/' . $seriesSlug . '.jpg';
+            foreach ($tocEra['chapters'] as $ec) {
+                foreach ($ec['parts'] as $ep) {
+                    if (!empty($ep['image'])) {
+                        $eraPreviewImg = $ep['image'];
+                        break 2;
+                    }
+                }
+            }
+            $allLinkPreviews[$eraStandaloneUrl] = [
+                'kind' => 'era',
+                'title' => $eraTitle,
+                'series' => $seriesTitle,
+                'series_slug' => $seriesSlug,
+                'kicker' => $seriesTitle . ' • Narrative Era',
+                'date' => $firstEraPart['date'] ?? '',
+                'location' => count($tocEra['chapters']) . ' ' . (count($tocEra['chapters']) === 1 ? 'Chapter' : 'Chapters'),
+                'image' => $eraPreviewImg,
+                'excerpt' => $firstEraPart['excerpt'] ?? ($seriesMeta['series_short_description'] ?? ''),
+                'url' => $eraStandaloneUrl
+            ];
+        }
+
+        return $compiledEras;
+    };
+
+    // Compile the primary `e*` directory tree
+    $tocBooks = $compileEraTree($narrativeDir, "/raggiesoft-books/books/{$seriesSlug}", null, null);
+
+    /*
+     * ========================================================================
+     * COMPILE MULTI-CROSSROADS NARRATIVE GRAPH (`books/<slug>/crossroads.json`)
+     * ========================================================================
+     * Supports ANY number of sequential or nested Story Crossroads at ANY point
+     * in a novel (`root e*` chapters OR nested inside `paths/<id>/e*` branches),
+     * with `2..N` coequal options per Crossroads.
+     *
+     * Compiles a deterministic Directed Acyclic Segment Graph (`segments`):
+     *   - `"__root__"`: Shared opening eras/chapters/parts up to the first Crossroads.
+     *   - `"<option-id>"`: Continuation segment for `<option-id>`, stopping cleanly at
+     *     `next_crossroads_id` (if another Crossroads follows along that branch) or
+     *     continuing to that storyline's conclusion (`next_crossroads_id = null`).
+     *   - Every segment, part, and route carries `required_choices` (`{cxId: optId}`)
+     *     so deep-linking to any chapter at any depth hydrates the exact ancestor
+     *     Crossroads choices in O(1) across Web PWA, SwiftUI, and Windows WPF.
+     */
+    $compiledCrossroadsList = [];
+    $compiledCrossroadsById = [];
+    $compiledPathsMap = [];
+    $compiledSegmentsMap = [];
+    $trunkEras = [];
+    $crossroadsManifestPath = $narrativeDir . '/crossroads.json';
+
+    if (is_file($crossroadsManifestPath)) {
+        $rawCxDoc = json_decode((string)@file_get_contents($crossroadsManifestPath), true);
+        $rawCxList = is_array($rawCxDoc['crossroads'] ?? null) ? $rawCxDoc['crossroads'] : [];
+
+        // Step 1: Pre-compile all `paths_dir` containers referenced by any Crossroads option
+        $containerTrees = ['' => $tocBooks];
+        foreach ($rawCxList as $rawCx) {
+            $cxIdPre = trim((string)($rawCx['id'] ?? ''));
+            foreach (($rawCx['options'] ?? []) as $rawOpt) {
+                $optIdPre = trim((string)($rawOpt['id'] ?? ''));
+                $optTypePre = trim((string)($rawOpt['source_type'] ?? 'paths_dir'));
+                if ($optIdPre === '' || $optTypePre !== 'paths_dir') {
+                    continue;
+                }
+                $relSrcDir = trim(str_replace('\\', '/', trim((string)($rawOpt['source_dir'] ?? "paths/{$optIdPre}"))), '/');
+                if ($relSrcDir !== '' && !isset($containerTrees[$relSrcDir])) {
+                    $absSrcDir = $narrativeDir . '/' . $relSrcDir;
+                    if (is_dir($absSrcDir)) {
+                        $containerTrees[$relSrcDir] = $compileEraTree(
+                            $absSrcDir,
+                            "/raggiesoft-books/books/{$seriesSlug}/{$relSrcDir}",
+                            $optIdPre,
+                            $cxIdPre
+                        );
+                    } else {
+                        fwrite(STDERR, "  [Crossroads Warning] {$seriesSlug}/{$cxIdPre}: Missing path directory '{$relSrcDir}'.\n");
+                    }
+                }
+            }
+        }
+
+        // Step 2: Assign each valid Crossroads to its container (`""` for root `e*`, or `"paths/<dir>"` for nested branches)
+        $crossroadsByContainer = [];
+        $knownContainerPrefixes = array_keys($containerTrees);
+        usort($knownContainerPrefixes, static fn($a, $b) => strlen($b) <=> strlen($a));
+
+        foreach ($rawCxList as $rawCx) {
+            $cxId = trim((string)($rawCx['id'] ?? ''));
+            $triggerRel = ltrim(str_replace('\\', '/', trim((string)($rawCx['trigger_part'] ?? ''))), '/');
+            if ($cxId === '' || $triggerRel === '' || !isset($seriesPartsByRelPath[$triggerRel])) {
+                fwrite(STDERR, "  [Crossroads Warning] {$seriesSlug}: Invalid crossroads '{$cxId}' or missing trigger_part '{$triggerRel}'.\n");
+                continue;
+            }
+            $matchedContainer = '';
+            foreach ($knownContainerPrefixes as $cPrefix) {
+                if ($cPrefix !== '' && str_starts_with($triggerRel, $cPrefix . '/')) {
+                    $matchedContainer = $cPrefix;
                     break;
                 }
             }
-            $allLinkPreviews[$chapStandaloneUrl] = [
-                'kind' => 'chapter',
-                'title' => $chapTitle,
-                'series' => $seriesTitle,
-                'series_slug' => $seriesSlug,
-                'kicker' => $seriesTitle . ' • ' . $eraTitle,
-                'date' => $firstChapPart['date'] ?? ($firstChapPart['stardate'] ?? ($firstChapPart['realm_time'] ?? '')),
-                'location' => $firstChapPart['location'] ?? '',
-                'image' => $chapPreviewImg,
-                'excerpt' => $firstChapPart['excerpt'] ?? ($seriesMeta['series_short_description'] ?? ''),
-                'url' => $chapStandaloneUrl
-            ];
+            $rawCx['_trig_meta'] = $seriesPartsByRelPath[$triggerRel];
+            $rawCx['_trigger_rel'] = $triggerRel;
+            $crossroadsByContainer[$matchedContainer][] = $rawCx;
         }
-        $tocEra['illustration_count'] = $eraIllustrationCount;
-        $tocEra['word_count'] = $eraWordCount;
-        $tocBooks[] = $tocEra;
 
-        // Register era-level preview card
-        $eraStandaloneUrl = str_replace('/raggiesoft-books/books', '', $eraRouteUrl);
-        $firstEraChap = $tocEra['chapters'][0] ?? null;
-        $firstEraPart = $firstEraChap['parts'][0] ?? null;
-        $eraPreviewImg = '/raggiesoft-books/images/covers/og/' . $seriesSlug . '.jpg';
-        foreach ($tocEra['chapters'] as $ec) {
-            foreach ($ec['parts'] as $ep) {
-                if (!empty($ep['image'])) {
-                    $eraPreviewImg = $ep['image'];
-                    break 2;
+        foreach ($crossroadsByContainer as $cKey => &$cxGroup) {
+            usort($cxGroup, static function (array $a, array $b): int {
+                $ma = $a['_trig_meta'];
+                $mb = $b['_trig_meta'];
+                if ((int)$ma['era_num'] !== (int)$mb['era_num']) return (int)$ma['era_num'] <=> (int)$mb['era_num'];
+                if ((int)$ma['chap_num'] !== (int)$mb['chap_num']) return (int)$ma['chap_num'] <=> (int)$mb['chap_num'];
+                return (int)$ma['part_num'] <=> (int)$mb['part_num'];
+            });
+        }
+        unset($cxGroup);
+
+        $splitErasAtTrigger = static function (array $sourceEras, int $trigEra, int $trigChap, int $trigPart): array {
+            $preEras = [];
+            $postEras = [];
+            foreach ($sourceEras as $srcEra) {
+                $eNum = (int)($srcEra['era_num'] ?? 0);
+                if ($eNum < $trigEra) {
+                    $preEras[] = $srcEra;
+                } elseif ($eNum > $trigEra) {
+                    $postEras[] = $srcEra;
+                } else {
+                    $preChaps = [];
+                    $postChaps = [];
+                    foreach (($srcEra['chapters'] ?? []) as $srcChap) {
+                        $cNum = (int)($srcChap['chap_num'] ?? 0);
+                        if ($cNum < $trigChap) {
+                            $preChaps[] = $srcChap;
+                        } elseif ($cNum > $trigChap) {
+                            $postChaps[] = $srcChap;
+                        } else {
+                            $tParts = [];
+                            $pParts = [];
+                            foreach (($srcChap['parts'] ?? []) as $srcPart) {
+                                if ((int)($srcPart['part_num'] ?? 0) <= $trigPart) {
+                                    $tParts[] = $srcPart;
+                                } else {
+                                    $pParts[] = $srcPart;
+                                }
+                            }
+                            if (!empty($tParts)) {
+                                $tChap = $srcChap;
+                                $tChap['parts'] = $tParts;
+                                $tChap['word_count'] = array_sum(array_column($tParts, 'word_count'));
+                                $tChap['illustration_count'] = array_sum(array_map(static fn($p) => (int)($p['image_count'] ?? (!empty($p['image']) ? 1 : 0)), $tParts));
+                                $preChaps[] = $tChap;
+                            }
+                            if (!empty($pParts)) {
+                                $pChap = $srcChap;
+                                $pChap['parts'] = $pParts;
+                                $pChap['word_count'] = array_sum(array_column($pParts, 'word_count'));
+                                $pChap['illustration_count'] = array_sum(array_map(static fn($p) => (int)($p['image_count'] ?? (!empty($p['image']) ? 1 : 0)), $pParts));
+                                $postChaps[] = $pChap;
+                            }
+                        }
+                    }
+                    if (!empty($preChaps)) {
+                        $tEra = $srcEra;
+                        $tEra['chapters'] = $preChaps;
+                        $tEra['word_count'] = array_sum(array_column($preChaps, 'word_count'));
+                        $tEra['illustration_count'] = array_sum(array_column($preChaps, 'illustration_count'));
+                        $preEras[] = $tEra;
+                    }
+                    if (!empty($postChaps)) {
+                        $pEra = $srcEra;
+                        $pEra['chapters'] = $postChaps;
+                        $pEra['word_count'] = array_sum(array_column($postChaps, 'word_count'));
+                        $pEra['illustration_count'] = array_sum(array_column($postChaps, 'illustration_count'));
+                        $postEras[] = $pEra;
+                    }
                 }
             }
+            return [$preEras, $postEras];
+        };
+
+        $finalizeNarrativeSegment = function (
+            string $segmentId,
+            array $segEras,
+            ?string $nextCrossroadsId,
+            array $requiredChoices,
+            ?array $optionMeta,
+            ?string $prevTriggerRouteUrl
+        ) use (&$routeData, &$compiledSegmentsMap, &$compiledPathsMap, $seriesSlug, $seriesMeta, &$seriesPartsByRelPath): array {
+            $isRootSeg = ($segmentId === '__root__');
+            $segPathId = $isRootSeg ? null : $segmentId;
+            $segCxId   = $optionMeta['crossroads_id'] ?? null;
+
+            $segPartRoutes = [];
+            $segPartEntries = [];
+            $segWords = 0;
+            $segHeroImg = '/raggiesoft-books/images/covers/og/' . $seriesSlug . '.jpg';
+            $foundHero = false;
+
+            foreach ($segEras as &$se) {
+                if ($segPathId !== null) {
+                    $se['path_id'] = $segPathId;
+                    $se['required_choices'] = (object)$requiredChoices;
+                }
+                foreach ($se['chapters'] as &$sc) {
+                    if ($segPathId !== null) {
+                        $sc['path_id'] = $segPathId;
+                        $sc['required_choices'] = (object)$requiredChoices;
+                    }
+                    foreach ($sc['parts'] as &$sp) {
+                        if ($segPathId !== null) {
+                            $sp['path_id'] = $segPathId;
+                        }
+                        if (!empty($requiredChoices)) {
+                            $sp['required_choices'] = (object)$requiredChoices;
+                        }
+                        $fullRUrl = '/raggiesoft-books/books' . $sp['url'];
+                        if (isset($routeData[$fullRUrl])) {
+                            if ($segPathId !== null) {
+                                $routeData[$fullRUrl]['pathId'] = $segPathId;
+                            }
+                            if ($segCxId !== null) {
+                                $routeData[$fullRUrl]['crossroadsId'] = $segCxId;
+                            }
+                            if (!empty($requiredChoices)) {
+                                $routeData[$fullRUrl]['requiredChoices'] = (object)$requiredChoices;
+                            }
+                        }
+                        $segPartRoutes[] = $fullRUrl;
+                        $segPartEntries[] = $sp;
+                        $segWords += (int)($sp['word_count'] ?? 0);
+                        if (!$foundHero && !empty($sp['image'])) {
+                            $segHeroImg = (string)$sp['image'];
+                            $foundHero = true;
+                        }
+                    }
+                    unset($sp);
+                }
+                unset($sc);
+            }
+            unset($se);
+
+            $segCount = count($segPartRoutes);
+            foreach ($segPartRoutes as $idx => $rUrl) {
+                if (!isset($routeData[$rUrl])) {
+                    continue;
+                }
+                if ($idx === 0) {
+                    if ($prevTriggerRouteUrl !== null && $prevTriggerRouteUrl !== '') {
+                        $routeData[$rUrl]['prevUrl'] = $prevTriggerRouteUrl;
+                    } else {
+                        $routeData[$rUrl]['noPrev'] = true;
+                    }
+                } else {
+                    $routeData[$rUrl]['prevUrl'] = $segPartRoutes[$idx - 1];
+                }
+
+                if ($idx < $segCount - 1) {
+                    $routeData[$rUrl]['nextUrl'] = $segPartRoutes[$idx + 1];
+                } else {
+                    if ($nextCrossroadsId !== null || empty($seriesMeta['next_series_url'])) {
+                        $routeData[$rUrl]['noNext'] = true;
+                    }
+                }
+            }
+
+            $entryPart = !empty($optionMeta['entry_part'])
+                ? $optionMeta['entry_part']
+                : (string)($segPartEntries[0]['file_path'] ?? '');
+            $entryUrl = isset($seriesPartsByRelPath[$entryPart])
+                ? (string)$seriesPartsByRelPath[$entryPart]['url']
+                : (string)($segPartEntries[0]['url'] ?? '');
+            $readingMins = max(1, (int)ceil($segWords / 250));
+
+            $segmentRecord = [
+                'id'                 => $segmentId,
+                'crossroads_id'      => $segCxId,
+                'label'              => $optionMeta['label'] ?? ($isRootSeg ? 'Opening Chapters' : $segmentId),
+                'subtitle'           => $optionMeta['subtitle'] ?? '',
+                'entry_part'         => $entryPart,
+                'entry_url'          => $entryUrl,
+                'next_crossroads_id' => $nextCrossroadsId,
+                'required_choices'   => (object)$requiredChoices,
+                'forbidden_terms'    => $optionMeta['forbidden_terms'] ?? [],
+                'part_count'         => $segCount,
+                'word_count'         => $segWords,
+                'reading_minutes'    => $readingMins,
+                'image'              => $segHeroImg,
+                'eras'               => $segEras,
+            ];
+            $compiledSegmentsMap[$segmentId] = $segmentRecord;
+            if (!$isRootSeg) {
+                $compiledPathsMap[$segmentId] = $segmentRecord;
+            }
+            return $segmentRecord;
+        };
+
+        $sliceContainerIntoSegments = null;
+        $sliceContainerIntoSegments = function (
+            string $containerKey,
+            array $workingEras,
+            string $currentSegId,
+            array $inheritedChoices,
+            ?array $currentOptMeta,
+            ?string $incomingTriggerRouteUrl
+        ) use (
+            &$sliceContainerIntoSegments,
+            &$compiledCrossroadsById,
+            $crossroadsByContainer,
+            $containerTrees,
+            $splitErasAtTrigger,
+            $finalizeNarrativeSegment
+        ): void {
+            $containerCxs = $crossroadsByContainer[$containerKey] ?? [];
+            foreach ($containerCxs as $rawCx) {
+                $cxId = trim((string)$rawCx['id']);
+                $trigMeta = $rawCx['_trig_meta'];
+                $triggerRel = (string)$rawCx['_trigger_rel'];
+                $trigRouteUrl = (string)$trigMeta['route_url'];
+                $trigStandaloneUrl = (string)$trigMeta['url'];
+                $cxParentChoices = $inheritedChoices;
+
+                [$preEras, $postEras] = $splitErasAtTrigger(
+                    $workingEras,
+                    (int)$trigMeta['era_num'],
+                    (int)$trigMeta['chap_num'],
+                    (int)$trigMeta['part_num']
+                );
+
+                $finalizeNarrativeSegment(
+                    $currentSegId,
+                    $preEras,
+                    $cxId,
+                    $cxParentChoices,
+                    $currentOptMeta,
+                    $incomingTriggerRouteUrl
+                );
+
+                $compiledOptions = [];
+                $inlineNextOpt = null;
+
+                foreach (($rawCx['options'] ?? []) as $rawOpt) {
+                    $optId = trim((string)($rawOpt['id'] ?? ''));
+                    $optLabel = trim((string)($rawOpt['label'] ?? ''));
+                    $optSubtitle = trim((string)($rawOpt['subtitle'] ?? ''));
+                    $optType = trim((string)($rawOpt['source_type'] ?? 'paths_dir'));
+                    if ($optId === '' || $optLabel === '') {
+                        continue;
+                    }
+                    $optChoices = array_merge($cxParentChoices, [$cxId => $optId]);
+                    $optEntryPartHint = !empty($rawOpt['entry_part'])
+                        ? ltrim(str_replace('\\', '/', trim((string)$rawOpt['entry_part'])), '/')
+                        : '';
+                    $optMeta = [
+                        'id'              => $optId,
+                        'crossroads_id'   => $cxId,
+                        'label'           => $optLabel,
+                        'subtitle'        => $optSubtitle,
+                        'entry_part'      => $optEntryPartHint,
+                        'forbidden_terms' => is_array($rawOpt['forbidden_terms'] ?? null) ? array_values(array_filter(array_map('strval', $rawOpt['forbidden_terms']))) : [],
+                    ];
+
+                    if ($optType === 'paths_dir') {
+                        $relSrcDir = trim(str_replace('\\', '/', trim((string)($rawOpt['source_dir'] ?? "paths/{$optId}"))), '/');
+                        if (!isset($containerTrees[$relSrcDir])) {
+                            continue;
+                        }
+                        $sliceContainerIntoSegments(
+                            $relSrcDir,
+                            $containerTrees[$relSrcDir],
+                            $optId,
+                            $optChoices,
+                            $optMeta,
+                            $trigRouteUrl
+                        );
+                        $compiledOptions[] = ['_opt_id' => $optId];
+                    } elseif ($optType === 'inline_continuation') {
+                        $inlineNextOpt = [
+                            'id'      => $optId,
+                            'choices' => $optChoices,
+                            'meta'    => $optMeta,
+                        ];
+                        $compiledOptions[] = ['_opt_id' => $optId];
+                    }
+                }
+
+                $compiledCrossroadsById[$cxId] = [
+                    'id'               => $cxId,
+                    'trigger_part'     => $triggerRel,
+                    'trigger_url'      => $trigStandaloneUrl,
+                    'kicker'           => trim((string)($rawCx['kicker'] ?? 'Story Crossroads')),
+                    'title'            => trim((string)($rawCx['title'] ?? 'Choose How the Story Continues')),
+                    'prompt'           => trim((string)($rawCx['prompt'] ?? '')),
+                    'required_choices' => (object)$cxParentChoices,
+                    '_option_Order'    => array_column($compiledOptions, '_opt_id'),
+                    '_trig_route_url'  => $trigRouteUrl,
+                ];
+
+                if ($inlineNextOpt !== null) {
+                    $workingEras = $postEras;
+                    $currentSegId = $inlineNextOpt['id'];
+                    $inheritedChoices = $inlineNextOpt['choices'];
+                    $currentOptMeta = $inlineNextOpt['meta'];
+                    $incomingTriggerRouteUrl = $trigRouteUrl;
+                } else {
+                    $workingEras = [];
+                    $currentSegId = '';
+                }
+            }
+
+            if ($currentSegId !== '' && !empty($workingEras)) {
+                $finalizeNarrativeSegment(
+                    $currentSegId,
+                    $workingEras,
+                    null,
+                    $inheritedChoices,
+                    $currentOptMeta,
+                    $incomingTriggerRouteUrl
+                );
+            }
+        };
+
+        $sliceContainerIntoSegments('', $tocBooks, '__root__', [], null, null);
+        $trunkEras = $compiledSegmentsMap['__root__']['eras'] ?? $tocBooks;
+
+        // Automated Story Crossroads Anti-Bleed Gate (`forbidden_terms`, `story_path:` YAML, & cross-branch hyperlinks)
+        $bleedViolations = [];
+        foreach ($compiledSegmentsMap as $segCheckId => $segCheck) {
+            if ($segCheckId === '__root__') {
+                continue;
+            }
+            $segForbiddenTerms = is_array($segCheck['forbidden_terms'] ?? null) ? $segCheck['forbidden_terms'] : [];
+            $allowedPathIds = array_values((array)($segCheck['required_choices'] ?? []));
+            $allowedPathIds[] = $segCheckId;
+
+            foreach (($segCheck['eras'] ?? []) as $chkEra) {
+                foreach (($chkEra['chapters'] ?? []) as $chkChap) {
+                    foreach (($chkChap['parts'] ?? []) as $chkPart) {
+                        $relFp = (string)($chkPart['file_path'] ?? '');
+                        $absFp = $narrativeDir . '/' . $relFp;
+                        if ($relFp === '' || !is_file($absFp)) {
+                            continue;
+                        }
+                        $rawFileText = (string)@file_get_contents($absFp);
+                        if (str_starts_with($relFp, 'paths/')) {
+                            $pathSegs = explode('/', $relFp);
+                            $expectedDirSlug = $pathSegs[1] ?? '';
+                            if ($expectedDirSlug !== '' && !preg_match('/^\s*story_path:\s*["\']?' . preg_quote($expectedDirSlug, '/') . '["\']?\s*$/m', $rawFileText)) {
+                                $bleedViolations[] = "{$seriesSlug}/{$relFp}: Missing or mismatched `story_path: \"{$expectedDirSlug}\"` in YAML frontmatter.";
+                            }
+                        }
+                        $lines = preg_split('/\R/', $rawFileText) ?: [];
+                        foreach ($lines as $lineZeroIdx => $lineStr) {
+                            $lineNum = $lineZeroIdx + 1;
+                            foreach ($segForbiddenTerms as $fTerm) {
+                                $fTermTrim = trim((string)$fTerm);
+                                if ($fTermTrim !== '' && stripos($lineStr, $fTermTrim) !== false) {
+                                    $bleedViolations[] = "{$seriesSlug}/{$relFp}:{$lineNum} [Path '{$segCheckId}'] contains forbidden sibling-branch term '{$fTermTrim}'.";
+                                }
+                            }
+                            if (preg_match_all('/\]\(([^)]+)\)/', $lineStr, $linkMatches)) {
+                                foreach ($linkMatches[1] as $targetHref) {
+                                    if (preg_match('#(?:^|/)paths/([A-Za-z0-9_-]+)/#', $targetHref, $pm)) {
+                                        $linkedPathSlug = $pm[1];
+                                        if (!in_array($linkedPathSlug, $allowedPathIds, true)) {
+                                            $bleedViolations[] = "{$seriesSlug}/{$relFp}:{$lineNum} [Path '{$segCheckId}'] links into sibling branch 'paths/{$linkedPathSlug}/' ({$targetHref}).";
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            unset($compiledSegmentsMap[$segCheckId]['forbidden_terms']);
+            if (isset($compiledPathsMap[$segCheckId])) {
+                unset($compiledPathsMap[$segCheckId]['forbidden_terms']);
+            }
         }
-        $allLinkPreviews[$eraStandaloneUrl] = [
-            'kind' => 'era',
-            'title' => $eraTitle,
-            'series' => $seriesTitle,
-            'series_slug' => $seriesSlug,
-            'kicker' => $seriesTitle . ' • Narrative Era',
-            'date' => $firstEraPart['date'] ?? '',
-            'location' => count($tocEra['chapters']) . ' ' . (count($tocEra['chapters']) === 1 ? 'Chapter' : 'Chapters'),
-            'image' => $eraPreviewImg,
-            'excerpt' => $firstEraPart['excerpt'] ?? ($seriesMeta['series_short_description'] ?? ''),
-            'url' => $eraStandaloneUrl
-        ];
+        unset($compiledSegmentsMap['__root__']['forbidden_terms']);
+
+        if (!empty($bleedViolations)) {
+            fwrite(STDERR, "\n❌ [Story Crossroads Anti-Bleed Gate Failed for '{$seriesSlug}']:\n");
+            foreach ($bleedViolations as $bv) {
+                fwrite(STDERR, "   • {$bv}\n");
+            }
+            exit(1);
+        }
+        echo "  [Crossroads Anti-Bleed] Verified zero cross-branch bleed across " . count($compiledPathsMap) . " Story Paths.\n";
+
+        foreach ($rawCxList as $rawCx) {
+            $cxId = trim((string)($rawCx['id'] ?? ''));
+            if (!isset($compiledCrossroadsById[$cxId])) {
+                continue;
+            }
+            $cxPending = $compiledCrossroadsById[$cxId];
+            $hydratedOpts = [];
+            foreach ($cxPending['_option_Order'] as $oid) {
+                if (!isset($compiledSegmentsMap[$oid])) {
+                    continue;
+                }
+                $seg = $compiledSegmentsMap[$oid];
+                $hydratedOpts[] = [
+                    'id'               => $seg['id'],
+                    'crossroads_id'    => $cxId,
+                    'label'            => $seg['label'],
+                    'subtitle'         => $seg['subtitle'],
+                    'entry_part'       => $seg['entry_part'],
+                    'entry_url'        => $seg['entry_url'],
+                    'required_choices' => $seg['required_choices'],
+                    'part_count'       => $seg['part_count'],
+                    'word_count'       => $seg['word_count'],
+                    'reading_minutes'  => $seg['reading_minutes'],
+                    'image'            => $seg['image'],
+                ];
+            }
+            if (empty($hydratedOpts)) {
+                continue;
+            }
+            $trigRUrl = $cxPending['_trig_route_url'];
+            $finalCx = [
+                'id'               => $cxPending['id'],
+                'trigger_part'     => $cxPending['trigger_part'],
+                'trigger_url'      => $cxPending['trigger_url'],
+                'kicker'           => $cxPending['kicker'],
+                'title'            => $cxPending['title'],
+                'prompt'           => $cxPending['prompt'],
+                'required_choices' => $cxPending['required_choices'],
+                'options'          => $hydratedOpts,
+            ];
+            $compiledCrossroadsList[] = $finalCx;
+            if (isset($routeData[$trigRUrl])) {
+                $routeData[$trigRUrl]['noNext'] = true;
+                $routeData[$trigRUrl]['crossroads'] = $finalCx;
+            }
+        }
     }
 
     // Register book-level, TOC, and Illustrations preview cards
@@ -1275,6 +1862,9 @@ foreach ($narrativeDirs as $narrativeDir) {
     );
     foreach ($bookDirIter as $bFileInfo) {
         if ($bFileInfo->isFile() && strtolower($bFileInfo->getExtension()) === 'md') {
+            if (strcasecmp($bFileInfo->getFilename(), 'BRANCH-CANON.md') === 0) {
+                continue;
+            }
             $absMdPath = $bFileInfo->getRealPath();
             if ($absMdPath !== false && !isset($seriesPartAbsPaths[$absMdPath])) {
                 $seriesInternalLoreWords += countReadableProseWords((string)@file_get_contents($absMdPath), true);
@@ -1479,11 +2069,17 @@ foreach ($narrativeDirs as $narrativeDir) {
         $newRouteData['common']['illustration_count'] = $seriesIllustrationCount;
         $newRouteData['common']['word_stats'] = $seriesWordStats;
         $newRouteData['common']['story_arcs'] = $storyArcs;
+        if (!empty($compiledCrossroadsList)) {
+            $newRouteData['common']['crossroads'] = $compiledCrossroadsList;
+        }
 
         foreach ($routeData as $key => $val) {
             if ($key === 'common') continue;
             // Adjust paths for the standalone book library routing scheme
             $newKey = str_replace('/raggiesoft-books/books', '', $key);
+            if (isset($val['prevUrl'])) {
+                $val['prevUrl'] = str_replace('/raggiesoft-books/books', '', $val['prevUrl']);
+            }
             if (isset($val['nextUrl'])) {
                 $val['nextUrl'] = str_replace('/raggiesoft-books/books', '', $val['nextUrl']);
             }
@@ -1521,10 +2117,18 @@ foreach ($narrativeDirs as $narrativeDir) {
             'story_arcs' => $storyArcs,
             'eras' => $tocBooks
         ];
+        if (!empty($compiledCrossroadsList)) {
+            $generatedToc['crossroads']      = $compiledCrossroadsList;
+            $generatedToc['root_segment_id'] = '__root__';
+            $generatedToc['segments']        = $compiledSegmentsMap;
+            $generatedToc['trunk_eras']      = $trunkEras;
+            $generatedToc['paths']           = $compiledPathsMap;
+        }
         $tocDestFile = $assetDestDir . '/' . $seriesSlug . '/toc.json';
         file_put_contents($tocDestFile, json_encode($generatedToc, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         $arcLogNote = count($storyArcs) > 0 ? (", " . count($storyArcs) . " story arcs") : '';
-        echo "  [Assets] Saved auto-discovered Table of Contents (with {$seriesIllustrationCount} illustrations{$arcLogNote}, " . number_format($seriesStoryWordCount) . " story words & eBook sizes) to toc.json\n";
+        $cxLogNote  = count($compiledCrossroadsList) > 0 ? (", " . count($compiledCrossroadsList) . " crossroads / " . count($compiledPathsMap) . " coequal paths") : '';
+        echo "  [Assets] Saved auto-discovered Table of Contents (with {$seriesIllustrationCount} illustrations{$arcLogNote}{$cxLogNote}, " . number_format($seriesStoryWordCount) . " story words & eBook sizes) to toc.json\n";
 
         // Package the book's toc.json, ovab.json, landing.md, and e* Markdown tree into <slug>-package.7z
         buildSeriesSevenZipPackage($seriesAssetDir, $seriesSlug);
@@ -2104,6 +2708,31 @@ if (is_dir($booksSubdomainDir)) {
                 }
             }
             $eraMaxMods[(string)$bIdx] = $eMod;
+        }
+        // Also pre-scan any Story Crossroads `paths/<path-id>/e*/c*` folders for accurate `<lastmod>`
+        $pathDirsForMod = glob($bookNarrDir . '/paths/*', GLOB_ONLYDIR) ?: [];
+        sort($pathDirsForMod);
+        foreach ($pathDirsForMod as $pathDirPath) {
+            $pIdKey = basename($pathDirPath);
+            $pBDirs = glob($pathDirPath . '/e*', GLOB_ONLYDIR) ?: [];
+            sort($pBDirs);
+            foreach ($pBDirs as $pBIdx => $pBPath) {
+                $peMod = $getLatestIsoDate([$pBPath . '/ovab.json', $bookNarrDir . '/crossroads.json'], $bookMaxMod);
+                $pCDirs = glob($pBPath . '/c*', GLOB_ONLYDIR) ?: [];
+                sort($pCDirs);
+                foreach ($pCDirs as $pCIdx => $pCPath) {
+                    $pPFiles = glob($pCPath . '/p*.md') ?: [];
+                    $pcMod = $getLatestIsoDate(array_merge([$pCPath . '/ovab.json'], $pPFiles), $peMod);
+                    $chapMaxMods["{$pIdKey}|{$pBIdx}|{$pCIdx}"] = $pcMod;
+                    if ($pcMod > $peMod) {
+                        $peMod = $pcMod;
+                    }
+                    if ($pcMod > $bookMaxMod) {
+                        $bookMaxMod = $pcMod;
+                    }
+                }
+                $eraMaxMods["{$pIdKey}|{$pBIdx}"] = $peMod;
+            }
         }
         if ($bookMaxMod > $globalLatestBookMod) {
             $globalLatestBookMod = $bookMaxMod;
