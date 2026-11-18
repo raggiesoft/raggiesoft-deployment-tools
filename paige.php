@@ -1618,7 +1618,7 @@ foreach ($narrativeDirs as $narrativeDir) {
                         'label'           => $optLabel,
                         'subtitle'        => $optSubtitle,
                         'entry_part'      => $optEntryPartHint,
-                        'forbidden_terms' => is_array($rawOpt['forbidden_terms'] ?? null) ? array_values(array_filter(array_map('strval', $rawOpt['forbidden_terms']))) : [],
+                        'forbidden_terms' => is_array($rawOpt['forbidden_terms'] ?? null) ? array_values($rawOpt['forbidden_terms']) : [],
                     ];
 
                     if ($optType === 'paths_dir') {
@@ -1713,9 +1713,28 @@ foreach ($narrativeDirs as $narrativeDir) {
                         $lines = preg_split('/\R/', $rawFileText) ?: [];
                         foreach ($lines as $lineZeroIdx => $lineStr) {
                             $lineNum = $lineZeroIdx + 1;
-                            foreach ($segForbiddenTerms as $fTerm) {
-                                $fTermTrim = trim((string)$fTerm);
-                                if ($fTermTrim !== '' && stripos($lineStr, $fTermTrim) !== false) {
+                            foreach ($segForbiddenTerms as $fRule) {
+                                $fTermTrim = '';
+                                $fAllowIn  = [];
+                                $fWordBound = false;
+                                if (is_string($fRule)) {
+                                    $fTermTrim = trim($fRule);
+                                } elseif (is_array($fRule)) {
+                                    $fTermTrim = trim((string)($fRule['term'] ?? ''));
+                                    $fWordBound = !empty($fRule['word_boundary']);
+                                    if (is_array($fRule['allow_in'] ?? null)) {
+                                        foreach ($fRule['allow_in'] as $aPath) {
+                                            $fAllowIn[] = ltrim(str_replace('\\', '/', trim((string)$aPath)), '/');
+                                        }
+                                    }
+                                }
+                                if ($fTermTrim === '' || in_array($relFp, $fAllowIn, true)) {
+                                    continue;
+                                }
+                                $matchedForbidden = $fWordBound
+                                    ? (bool)preg_match('/\b' . preg_quote($fTermTrim, '/') . '\b/iu', $lineStr)
+                                    : (stripos($lineStr, $fTermTrim) !== false);
+                                if ($matchedForbidden) {
                                     $bleedViolations[] = "{$seriesSlug}/{$relFp}:{$lineNum} [Path '{$segCheckId}'] contains forbidden sibling-branch term '{$fTermTrim}'.";
                                 }
                             }
