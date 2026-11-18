@@ -2090,6 +2090,17 @@ foreach ($narrativeDirs as $narrativeDir) {
         $newRouteData['common']['story_arcs'] = $storyArcs;
         if (!empty($compiledCrossroadsList)) {
             $newRouteData['common']['crossroads'] = $compiledCrossroadsList;
+            // Select 3-directional vs 2-directional Story Crossroads brand assets automatically
+            $maxCxDirections = 2;
+            foreach ($compiledCrossroadsList as $cxCheck) {
+                if (count($cxCheck['options'] ?? []) >= 3) {
+                    $maxCxDirections = 3;
+                    break;
+                }
+            }
+            $newRouteData['common']['navbarBrandLogo'] = "/raggiesoft-books/images/logos/story-crossroads-seal-{$maxCxDirections}way.svg";
+            $newRouteData['common']['story_crossroads_logo'] = "/raggiesoft-books/images/logos/story-crossroads-logo-{$maxCxDirections}way-512.png";
+            $newRouteData['common']['story_crossroads_seal'] = "/raggiesoft-books/images/logos/story-crossroads-seal-{$maxCxDirections}way.svg";
         }
 
         foreach ($routeData as $key => $val) {
