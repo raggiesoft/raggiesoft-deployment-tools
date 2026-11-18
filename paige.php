@@ -520,7 +520,7 @@ if (is_file($errPreloadCatalogFile)) {
 $bookLoreFolderMap = [
     'rachel'                    => ['lore/rachel', 'backstage/books/rachel'],
     'aubrie'                    => ['lore/aubrie', 'backstage/books/aubrie'],
-    'luna-leo'                  => ['lore/luna-leo'],
+    'luna-leo'                  => ['lore/luna-leo', 'backstage/books/luna-leo'],
     'alex-chloe'                => ['lore/astro-kids'],
     'paige'                     => ['lore/paige'],
     'nichole'                   => ['lore/nichole'],
