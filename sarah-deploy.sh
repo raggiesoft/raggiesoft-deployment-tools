@@ -210,18 +210,13 @@ from pathlib import Path
 # Directories skipped completely because they are third-party, XML sitemaps, or already bundler-minified
 SKIP_DIRS = {".git", "node_modules", "vendor", "3rdparty", "sitemaps", "logs"}
 
-# Regexes splitting HTML around raw-text tags whose internal whitespace/comments have special rules
-RAW_HTML_BLOCK_RE = re.compile(
-    r"(<(?:script|style|pre|code|textarea)\b[^>]*>[\s\S]*?</(?:script|style|pre|code|textarea)>)",
+# Single-pass HTML5 lexical matcher: scans left-to-right from byte 0 so an HTML comment
+# (`<!-- ... -->`) containing literal teaching text like `` `<script>` `` is consumed as a
+# comment FIRST and can NEVER be mistaken for an opening `<script>` tag!
+HTML_TOKEN_RE = re.compile(
+    r"<!--[\s\S]*?-->|<(script|style|pre|code|textarea)\b([^>]*)>([\s\S]*?)</\1>",
     re.IGNORECASE,
 )
-STYLE_TAG_RE = re.compile(r"^<style\b([^>]*)>([\s\S]*?)</style>$", re.IGNORECASE)
-JSONLD_TAG_RE = re.compile(
-    r'^<script\b([^>]*type=["\']application/(?:ld\+)?json["\'][^>]*)>([\s\S]*?)</script>$',
-    re.IGNORECASE,
-)
-INLINE_JS_TAG_RE = re.compile(r"^<script\b([^>]*)>([\s\S]*?)</script>$", re.IGNORECASE)
-HTML_COMMENT_RE = re.compile(r"<!--(?!\[if\b|<!)[\s\S]*?-->")
 
 # ECMAScript grammar tokens after which `/` begins a `/regex/` literal instead of division
 JS_REGEX_PRECEDERS = {
@@ -534,53 +529,101 @@ def strip_js_comments(js: str) -> str:
     return "".join(out).strip() + "\n"
 
 
-def minify_html_fragment(html: str) -> str:
-    """Strips HTML comments outside raw tags and compacts inline <style>, <script>, and JSON-LD."""
-    parts = RAW_HTML_BLOCK_RE.split(html)
+def is_hydration_or_special_comment(comment: str) -> bool:
+    """
+    Preserves framework SSR hydration & boundary comment nodes required at runtime by:
+      - Svelte 5 (`<!--[-->`, `<!--[-1-->`, `<!--[0-->`, `<!--]-->`, `<!---->`, `<!--1uha8ag-->`)
+      - React 19 / Next.js (`<!--$-->`, `<!--$!-->`, `<!--/$-->`, `<!-- -->`)
+      - Vue 3 / Nuxt / Angular / Lit (`<!--[-->`, `<!--]-->`, `<!--ngh=...-->`, `<!--lit-...-->`)
+      - Conditional comments (`<!--[if ...]-->`)
+    Only multi-word human prose comments that start with whitespace are stripped!
+    """
+    inner = comment[4:-3]
+    if not inner:
+        return True
+    stripped = inner.strip()
+    if not stripped:
+        return True
+    if not inner[0].isspace():
+        return True
+    if " " not in stripped and "\n" not in stripped:
+        return True
+    return False
+
+
+def compact_inter_tag_whitespace(chunk: str) -> str:
+    chunk = re.sub(r"\n[ \t]+", "\n", chunk)
+    chunk = re.sub(r"\n{2,}", "\n", chunk)
+    return chunk
+
+
+def minify_html_fragment(html: str, node_bin: str | None = None, tmp_dir: Path | None = None) -> str:
+    """Single-pass HTML5-tokenizer-safe minifier preserving SSR hydration markers."""
     out = []
-    for idx, part in enumerate(parts):
-        if idx % 2 == 1:
-            m_style = STYLE_TAG_RE.match(part)
-            if m_style:
-                attrs, css_body = m_style.group(1), m_style.group(2)
-                minified_css = minify_css(css_body)
-                if minified_css.count("{") == minified_css.count("}"):
-                    out.append(f"<style{attrs}>{minified_css}</style>")
-                    continue
-            m_jsonld = JSONLD_TAG_RE.match(part)
-            if m_jsonld:
-                attrs, json_body = m_jsonld.group(1), m_jsonld.group(2)
+    pos = 0
+    for m in HTML_TOKEN_RE.finditer(html):
+        if m.start() > pos:
+            out.append(compact_inter_tag_whitespace(html[pos : m.start()]))
+        pos = m.end()
+        full = m.group(0)
+
+        # Case 1: Top-level HTML comment (`<!-- ... -->`)
+        if full.startswith("<!--"):
+            if is_hydration_or_special_comment(full):
+                out.append(full)
+            continue
+
+        # Case 2: Matched raw/rcdata element (`<script>`, `<style>`, `<pre>`, `<code>`, `<textarea>`)
+        tag = m.group(1).lower()
+        attrs = m.group(2)
+        body = m.group(3)
+
+        if tag == "style":
+            minified_css = minify_css(body)
+            if minified_css.count("{") == minified_css.count("}"):
+                out.append(f"<style{attrs}>{minified_css}</style>")
+                continue
+        elif tag == "script":
+            low_attrs = attrs.lower()
+            if 'application/ld+json' in low_attrs or 'application/json' in low_attrs:
                 try:
-                    parsed = json.loads(json_body)
+                    parsed = json.loads(body)
                     compact_json = json.dumps(parsed, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
                     out.append(f"<script{attrs}>{compact_json}</script>")
                     continue
                 except Exception:
                     pass
-            m_js = INLINE_JS_TAG_RE.match(part)
-            if m_js:
-                attrs, js_body = m_js.group(1), m_js.group(2)
-                low_attrs = attrs.lower()
-                if "src=" not in low_attrs and (
-                    "type=" not in low_attrs
-                    or "javascript" in low_attrs
-                    or 'type="module"' in low_attrs
-                    or "type='module'" in low_attrs
-                ):
-                    if js_body.strip():
-                        out.append(f"<script{attrs}>{strip_js_comments(js_body).strip()}</script>")
+            elif "src=" not in low_attrs and (
+                "type=" not in low_attrs
+                or "javascript" in low_attrs
+                or 'type="module"' in low_attrs
+                or "type='module'" in low_attrs
+            ):
+                if body.strip() and ("//" in body or "/*" in body):
+                    candidate = strip_js_comments(body).strip()
+                    ok = True
+                    if node_bin and tmp_dir:
+                        chk_file = tmp_dir / ".sarah_inline_chk.mjs"
+                        try:
+                            chk_file.write_text(candidate, encoding="utf-8")
+                            chk = subprocess.run([node_bin, "--check", str(chk_file)], capture_output=True)
+                            ok = chk.returncode == 0
+                        finally:
+                            chk_file.unlink(missing_ok=True)
+                    if ok:
+                        out.append(f"<script{attrs}>{candidate}</script>")
                         continue
-            out.append(part)
-        else:
-            cleaned = HTML_COMMENT_RE.sub("", part)
-            cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
-            cleaned = re.sub(r"\n{2,}", "\n", cleaned)
-            out.append(cleaned)
+
+        out.append(full)
+
+    if pos < len(html):
+        out.append(compact_inter_tag_whitespace(html[pos:]))
     return "".join(out)
 
 
 # Inline PHP helper passed to `php -r`: runs Zend's `php_strip_whitespace` first, then uses
-# `token_get_all` to strip complete `<!-- ... -->` HTML comments outside raw `<script>`/`<style>`/`<pre>` tags!
+# single-pass `preg_replace_callback` across `T_INLINE_HTML` so `<script>` inside an HTML comment
+# never confuses raw-tag tracking and SSR/hydration markers stay 100% intact!
 PHP_TOKEN_MINIFIER = r"""
 $src = php_strip_whitespace($argv[1]);
 $tokens = token_get_all($src);
@@ -590,25 +633,33 @@ foreach ($tokens as $tok) {
     if (is_array($tok)) {
         if ($tok[0] === T_INLINE_HTML) {
             $chunk = $tok[1];
-            $parts = preg_split('!(<(?:script|style|pre|code|textarea)\b[^>]*>|</(?:script|style|pre|code|textarea)>)!i', $chunk, -1, PREG_SPLIT_DELIM_CAPTURE);
-            $buf = '';
-            foreach ($parts as $p) {
-                if (preg_match('!^<(?:script|style|pre|code|textarea)\b!i', $p)) {
-                    $inRaw = true;
-                    $buf .= $p;
-                } elseif (preg_match('!^</(?:script|style|pre|code|textarea)>!i', $p)) {
-                    $inRaw = false;
-                    $buf .= $p;
-                } elseif (!$inRaw) {
-                    $c = preg_replace('/<!--(?!\[if\b|<!)[\s\S]*?-->/', '', $p);
-                    $c = preg_replace('/\n[ \t]+/', "\n", $c);
-                    $c = preg_replace('/\n{2,}/', "\n", $c);
-                    $buf .= $c;
-                } else {
-                    $buf .= $p;
-                }
+            $chunk = preg_replace_callback(
+                '/<!--[\s\S]*?-->|<(?:script|style|pre|code|textarea)\b[^>]*>|<\/(?:script|style|pre|code|textarea)>/i',
+                function ($m) use (&$inRaw) {
+                    $s = $m[0];
+                    if (str_starts_with($s, '<!--')) {
+                        if ($inRaw) return $s;
+                        $inner = substr($s, 4, -3);
+                        if ($inner === '' || trim($inner) === '') return $s;
+                        if (!ctype_space($inner[0])) return $s;
+                        $trimmed = trim($inner);
+                        if (!str_contains($trimmed, ' ') && !str_contains($trimmed, "\n")) return $s;
+                        return '';
+                    }
+                    if ($s[1] === '/') {
+                        $inRaw = false;
+                    } else {
+                        $inRaw = true;
+                    }
+                    return $s;
+                },
+                $chunk
+            );
+            if (!$inRaw) {
+                $chunk = preg_replace('/\n[ \t]+/', "\n", $chunk);
+                $chunk = preg_replace('/\n{2,}/', "\n", $chunk);
             }
-            $out .= $buf;
+            $out .= $chunk;
         } else {
             $out .= $tok[1];
         }
@@ -712,7 +763,7 @@ def main() -> None:
                 elif low.endswith(".html"):
                     raw = fpath.read_text(encoding="utf-8")
                     b0 = len(raw.encode("utf-8"))
-                    minified = minify_html_fragment(raw)
+                    minified = minify_html_fragment(raw, node_bin, fpath.parent)
                     b1 = len(minified.encode("utf-8"))
                     if b1 < b0:
                         fpath.write_text(minified, encoding="utf-8")
