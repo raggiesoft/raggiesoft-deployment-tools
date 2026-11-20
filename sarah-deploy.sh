@@ -22,8 +22,10 @@
 #   - Steps 1–11 (All 11 Live Showrooms): Compares `LOCAL` vs `REMOTE` Git commit
 #     hashes across all 11 site repos in `/home/michael/raggiesoft-*`. If unchanged,
 #     skips in milliseconds! If updated, resets to `origin/main`, `rsync`s the static/PHP
-#     payload into `/var/www/<domain>`, normalizes `755`/`644` permissions, and pings
-#     **IndexNow** (`api.indexnow.org`) so Bing/DuckDuckGo/Yandex crawl instantly!
+#     payload into `/var/www/<domain>`, runs `minify_showroom` on `/var/www/<domain>`
+#     (so GitHub keeps 100% of our beginner-friendly Read-Along Teaching Comments while
+#     live production serves stripped, minified PHP/JS/CSS/HTML/JSON!), normalizes
+#     `755`/`644` permissions, and pings **IndexNow** (`api.indexnow.org`)!
 # ==============================================================================
 # "I check for updates every 5 minutes. If Jenna pushed code, I deploy it instantly."
 # NO SUDO REQUIRED FOR WEB FILES.
@@ -161,6 +163,593 @@ PYEOF
 }
 
 # ==============================================================================
+# Helper: minify_showroom <web_root>
+# ==============================================================================
+# WHY WE MINIFY IN SARAH (`/var/www/*`) INSTEAD OF IN GIT REPOSITORIES:
+#   Every source file across RaggieSoft's GitHub repositories is written with
+#   exhaustive, beginner-friendly "Read-Along Teaching Comments" from top to bottom
+#   so any developer, student, or hiring manager browsing GitHub can understand
+#   every line. However, shipping megabytes of comments and indentation on live
+#   production wastes bandwidth, disk I/O, and parse time!
+#
+#   Because `deploy_site` copies files one-way from `/home/michael/raggiesoft-*`
+#   into `/var/www/<domain>` via `rsync`, running `minify_showroom` exclusively on
+#   `/var/www/<domain>` gives us the best of both worlds:
+#     - GitHub & `/home/michael/raggiesoft-*` keep 100% of human-readable comments.
+#     - `/var/www/<domain>` serves stripped, compact PHP, CSS, JS, HTML, and JSON!
+#
+# HOW EACH FILE TYPE IS MINIFIED SAFELY (ZERO BROKEN SYNTAX):
+#   1. `.php`       : Uses PHP's built-in C Zend Engine lexer (`php -w`) + `token_get_all()`
+#                     to strip both PHP comments and non-raw HTML comments, then gates
+#                     every file through `php -l` before replacing!
+#   2. `.css`       : Single-pass lexical state machine tracking `'...'`, `"..."`, and `url(...)`
+#                     so `/* ... */` comments and redundant whitespace are stripped without
+#                     ever breaking `calc(100% - 2rem)` or `.parent :hover`, gated by `{}` balance.
+#   3. `.js`/`.mjs` : Single-pass ASI-safe ECMAScript lexical scanner tracking strings,
+#                     nested `` `...${...}...` `` template literals, and `/.../flags` regex
+#                     literals—gated by `node --check` whenever Node.js is installed!
+#   4. `.html`      : Strips `<!-- ... -->` comments outside `<script>`/`<style>`/`<pre>`/
+#                     `<code>`/`<textarea>` while minifying inline `<style>`, `<script>`, and JSON-LD.
+#   5. `.json`      : Parses via `json.loads()` and re-serializes with `separators=(",", ":")`.
+function minify_showroom() {
+    local WEB_ROOT="$1"
+    if [ ! -d "$WEB_ROOT" ] || ! command -v python3 >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # Feed the inline Python minifier via stdin (`python3 - "$WEB_ROOT" <<'PYMIN'`)
+    python3 - "$WEB_ROOT" <<'PYMIN' 2>/dev/null || true
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+# Directories skipped completely because they are third-party, XML sitemaps, or already bundler-minified
+SKIP_DIRS = {".git", "node_modules", "vendor", "3rdparty", "sitemaps", "logs"}
+
+# Regexes splitting HTML around raw-text tags whose internal whitespace/comments have special rules
+RAW_HTML_BLOCK_RE = re.compile(
+    r"(<(?:script|style|pre|code|textarea)\b[^>]*>[\s\S]*?</(?:script|style|pre|code|textarea)>)",
+    re.IGNORECASE,
+)
+STYLE_TAG_RE = re.compile(r"^<style\b([^>]*)>([\s\S]*?)</style>$", re.IGNORECASE)
+JSONLD_TAG_RE = re.compile(
+    r'^<script\b([^>]*type=["\']application/(?:ld\+)?json["\'][^>]*)>([\s\S]*?)</script>$',
+    re.IGNORECASE,
+)
+INLINE_JS_TAG_RE = re.compile(r"^<script\b([^>]*)>([\s\S]*?)</script>$", re.IGNORECASE)
+HTML_COMMENT_RE = re.compile(r"<!--(?!\[if\b|<!)[\s\S]*?-->")
+
+# ECMAScript grammar tokens after which `/` begins a `/regex/` literal instead of division
+JS_REGEX_PRECEDERS = {
+    "(", ",", "=", ":", "[", "!", "&", "|", "?", "{", "}", ";",
+    "+", "-", "*", "/", "%", "^", "~", "<", ">",
+}
+JS_REGEX_KEYWORDS = {
+    "return", "throw", "case", "delete", "void", "typeof",
+    "yield", "await", "in", "of", "instanceof", "new", "else", "do",
+}
+
+
+def minify_css(css: str) -> str:
+    """Strips /*...*/ CSS comments outside strings/url() and collapses safe whitespace."""
+    out = []
+    n = len(css)
+    i = 0
+    in_quote = None
+    in_url = False
+    paren_depth = 0
+
+    while i < n:
+        ch = css[i]
+        if in_quote:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(css[i + 1])
+                i += 2
+                continue
+            if ch == in_quote:
+                in_quote = None
+            i += 1
+            continue
+        if in_url:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(css[i + 1])
+                i += 2
+                continue
+            if ch in ("'", '"'):
+                in_quote = ch
+            elif ch == "(":
+                paren_depth += 1
+            elif ch == ")":
+                paren_depth -= 1
+                if paren_depth <= 0:
+                    in_url = False
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n and css[i + 1] == "*":
+            end = css.find("*/", i + 2)
+            if end == -1:
+                break
+            out.append(" ")
+            i = end + 2
+            continue
+        if ch in ("'", '"'):
+            in_quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch in ("u", "U") and css[i : i + 4].lower() == "url(":
+            in_url = True
+            paren_depth = 1
+            out.append(css[i : i + 4])
+            i += 4
+            continue
+        out.append(ch)
+        i += 1
+
+    stripped = "".join(out)
+    res = []
+    i = 0
+    m = len(stripped)
+    in_quote = None
+    in_url = False
+    paren_depth = 0
+
+    while i < m:
+        ch = stripped[i]
+        if in_quote:
+            res.append(ch)
+            if ch == "\\" and i + 1 < m:
+                res.append(stripped[i + 1])
+                i += 2
+                continue
+            if ch == in_quote:
+                in_quote = None
+            i += 1
+            continue
+        if in_url:
+            res.append(ch)
+            if ch == "\\" and i + 1 < m:
+                res.append(stripped[i + 1])
+                i += 2
+                continue
+            if ch in ("'", '"'):
+                in_quote = ch
+            elif ch == "(":
+                paren_depth += 1
+            elif ch == ")":
+                paren_depth -= 1
+                if paren_depth <= 0:
+                    in_url = False
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            in_quote = ch
+            res.append(ch)
+            i += 1
+            continue
+        if ch in ("u", "U") and stripped[i : i + 4].lower() == "url(":
+            in_url = True
+            paren_depth = 1
+            res.append(stripped[i : i + 4])
+            i += 4
+            continue
+        if ch.isspace():
+            while i < m and stripped[i].isspace():
+                i += 1
+            prev_ch = res[-1] if res else ""
+            next_ch = stripped[i] if i < m else ""
+            if prev_ch in ("", "{", "}", ";", ",") or next_ch in ("", "{", "}", ";", ","):
+                continue
+            res.append(" ")
+            continue
+        if ch == "}" and res and res[-1] == ";":
+            res[-1] = "}"
+            i += 1
+            continue
+        res.append(ch)
+        i += 1
+
+    return "".join(res).strip()
+
+
+def strip_js_comments(js: str) -> str:
+    """Single-pass ASI-safe ECMAScript comment & horizontal whitespace compactor."""
+    out = []
+    n = len(js)
+    i = 0
+    template_brace_stack = []
+    last_sig_char = ""
+    last_word = ""
+    pending_nl = False
+    pending_space = False
+
+    if js.startswith("#!"):
+        nl = js.find("\n")
+        if nl == -1:
+            return js
+        out.append(js[: nl + 1])
+        i = nl + 1
+
+    def flush_ws(next_first_char: str) -> None:
+        nonlocal pending_nl, pending_space
+        if pending_nl:
+            if out and out[-1] != "\n":
+                out.append("\n")
+            pending_nl = False
+            pending_space = False
+        elif pending_space:
+            prev_c = out[-1][-1] if out and out[-1] else ""
+            if prev_c and next_first_char and (
+                ((prev_c.isalnum() or prev_c in "_$") and (next_first_char.isalnum() or next_first_char in "_$"))
+                or (prev_c == "+" and next_first_char == "+")
+                or (prev_c == "-" and next_first_char == "-")
+                or (prev_c == "/" and next_first_char in ("/", "*"))
+            ):
+                out.append(" ")
+            pending_space = False
+
+    def can_start_regex() -> bool:
+        if not last_sig_char:
+            return True
+        if last_sig_char in JS_REGEX_PRECEDERS:
+            return True
+        if last_word in JS_REGEX_KEYWORDS:
+            return True
+        return False
+
+    def consume_template_body(idx: int) -> int:
+        while idx < n:
+            c = js[idx]
+            out.append(c)
+            if c == "\\" and idx + 1 < n:
+                out.append(js[idx + 1])
+                idx += 2
+                continue
+            if c == "`":
+                return idx + 1
+            if c == "$" and idx + 1 < n and js[idx + 1] == "{":
+                out.append("{")
+                template_brace_stack.append(1)
+                return idx + 2
+            idx += 1
+        return idx
+
+    while i < n:
+        ch = js[i]
+        if ch in (" ", "\t", "\r", "\n"):
+            if ch == "\n":
+                pending_nl = True
+            else:
+                pending_space = True
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n and js[i + 1] == "/":
+            nl = js.find("\n", i + 2)
+            if nl == -1:
+                break
+            pending_nl = True
+            i = nl + 1
+            continue
+        if ch == "/" and i + 1 < n and js[i + 1] == "*":
+            end = js.find("*/", i + 2)
+            if end == -1:
+                break
+            if "\n" in js[i + 2 : end]:
+                pending_nl = True
+            else:
+                pending_space = True
+            i = end + 2
+            continue
+
+        flush_ws(ch)
+
+        if ch in ("'", '"'):
+            quote = ch
+            start = i
+            i += 1
+            while i < n:
+                c = js[i]
+                if c == "\\" and i + 1 < n:
+                    i += 2
+                    continue
+                i += 1
+                if c == quote:
+                    break
+            out.append(js[start:i])
+            last_sig_char = quote
+            last_word = ""
+            continue
+        if ch == "`":
+            out.append(ch)
+            last_sig_char = "`"
+            last_word = ""
+            i = consume_template_body(i + 1)
+            continue
+        if ch == "{" and template_brace_stack:
+            template_brace_stack[-1] += 1
+            out.append(ch)
+            last_sig_char = "{"
+            last_word = ""
+            i += 1
+            continue
+        if ch == "}" and template_brace_stack:
+            template_brace_stack[-1] -= 1
+            out.append(ch)
+            if template_brace_stack[-1] == 0:
+                template_brace_stack.pop()
+                last_sig_char = "`"
+                last_word = ""
+                i = consume_template_body(i + 1)
+                continue
+            last_sig_char = "}"
+            last_word = ""
+            i += 1
+            continue
+        if ch == "/" and can_start_regex():
+            start = i
+            i += 1
+            in_char_class = False
+            while i < n:
+                c = js[i]
+                if c == "\\" and i + 1 < n:
+                    i += 2
+                    continue
+                if c == "[":
+                    in_char_class = True
+                elif c == "]":
+                    in_char_class = False
+                elif c == "/" and not in_char_class:
+                    i += 1
+                    while i < n and (js[i].isalpha() or js[i] == "$"):
+                        i += 1
+                    break
+                elif c == "\n":
+                    break
+                i += 1
+            out.append(js[start:i])
+            last_sig_char = "/"
+            last_word = ""
+            continue
+        if ch.isalpha() or ch in ("_", "$"):
+            start = i
+            while i < n and (js[i].isalnum() or js[i] in ("_", "$")):
+                i += 1
+            word = js[start:i]
+            out.append(word)
+            last_word = word
+            last_sig_char = word[-1]
+            continue
+
+        out.append(ch)
+        last_sig_char = ch
+        last_word = ""
+        i += 1
+
+    return "".join(out).strip() + "\n"
+
+
+def minify_html_fragment(html: str) -> str:
+    """Strips HTML comments outside raw tags and compacts inline <style>, <script>, and JSON-LD."""
+    parts = RAW_HTML_BLOCK_RE.split(html)
+    out = []
+    for idx, part in enumerate(parts):
+        if idx % 2 == 1:
+            m_style = STYLE_TAG_RE.match(part)
+            if m_style:
+                attrs, css_body = m_style.group(1), m_style.group(2)
+                minified_css = minify_css(css_body)
+                if minified_css.count("{") == minified_css.count("}"):
+                    out.append(f"<style{attrs}>{minified_css}</style>")
+                    continue
+            m_jsonld = JSONLD_TAG_RE.match(part)
+            if m_jsonld:
+                attrs, json_body = m_jsonld.group(1), m_jsonld.group(2)
+                try:
+                    parsed = json.loads(json_body)
+                    compact_json = json.dumps(parsed, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+                    out.append(f"<script{attrs}>{compact_json}</script>")
+                    continue
+                except Exception:
+                    pass
+            m_js = INLINE_JS_TAG_RE.match(part)
+            if m_js:
+                attrs, js_body = m_js.group(1), m_js.group(2)
+                low_attrs = attrs.lower()
+                if "src=" not in low_attrs and (
+                    "type=" not in low_attrs
+                    or "javascript" in low_attrs
+                    or 'type="module"' in low_attrs
+                    or "type='module'" in low_attrs
+                ):
+                    if js_body.strip():
+                        out.append(f"<script{attrs}>{strip_js_comments(js_body).strip()}</script>")
+                        continue
+            out.append(part)
+        else:
+            cleaned = HTML_COMMENT_RE.sub("", part)
+            cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
+            cleaned = re.sub(r"\n{2,}", "\n", cleaned)
+            out.append(cleaned)
+    return "".join(out)
+
+
+# Inline PHP helper passed to `php -r`: runs Zend's `php_strip_whitespace` first, then uses
+# `token_get_all` to strip complete `<!-- ... -->` HTML comments outside raw `<script>`/`<style>`/`<pre>` tags!
+PHP_TOKEN_MINIFIER = r"""
+$src = php_strip_whitespace($argv[1]);
+$tokens = token_get_all($src);
+$out = '';
+$inRaw = false;
+foreach ($tokens as $tok) {
+    if (is_array($tok)) {
+        if ($tok[0] === T_INLINE_HTML) {
+            $chunk = $tok[1];
+            $parts = preg_split('!(<(?:script|style|pre|code|textarea)\b[^>]*>|</(?:script|style|pre|code|textarea)>)!i', $chunk, -1, PREG_SPLIT_DELIM_CAPTURE);
+            $buf = '';
+            foreach ($parts as $p) {
+                if (preg_match('!^<(?:script|style|pre|code|textarea)\b!i', $p)) {
+                    $inRaw = true;
+                    $buf .= $p;
+                } elseif (preg_match('!^</(?:script|style|pre|code|textarea)>!i', $p)) {
+                    $inRaw = false;
+                    $buf .= $p;
+                } elseif (!$inRaw) {
+                    $c = preg_replace('/<!--(?!\[if\b|<!)[\s\S]*?-->/', '', $p);
+                    $c = preg_replace('/\n[ \t]+/', "\n", $c);
+                    $c = preg_replace('/\n{2,}/', "\n", $c);
+                    $buf .= $c;
+                } else {
+                    $buf .= $p;
+                }
+            }
+            $out .= $buf;
+        } else {
+            $out .= $tok[1];
+        }
+    } else {
+        $out .= $tok;
+    }
+}
+echo $out;
+"""
+
+
+def minify_php_file(path: Path, php_bin: str) -> tuple[int, int]:
+    orig_bytes = path.stat().st_size
+    res = subprocess.run([php_bin, "-r", PHP_TOKEN_MINIFIER, str(path)], capture_output=True)
+    if res.returncode != 0 or not res.stdout:
+        return orig_bytes, orig_bytes
+    tmp = path.with_name(".sarah_tmp_" + path.name)
+    tmp.write_bytes(res.stdout)
+    chk = subprocess.run([php_bin, "-l", str(tmp)], capture_output=True)
+    if chk.returncode == 0:
+        new_bytes = tmp.stat().st_size
+        if new_bytes < orig_bytes:
+            os.replace(tmp, path)
+            return orig_bytes, new_bytes
+    tmp.unlink(missing_ok=True)
+    return orig_bytes, orig_bytes
+
+
+def main() -> None:
+    web_root = Path(sys.argv[1])
+    php_bin = shutil.which("php")
+    node_bin = shutil.which("node")
+    total_before = 0
+    total_after = 0
+    files_minified = 0
+
+    for root, dirs, files in os.walk(web_root):
+        dirs[:] = [
+            d for d in dirs
+            if d not in SKIP_DIRS
+            and not (d == "immutable" and os.path.basename(root) == "_app")
+            and not (d == "static" and os.path.basename(root) == "_next")
+        ]
+        for fname in files:
+            if fname.startswith(".sarah_tmp_"):
+                continue
+            fpath = Path(root) / fname
+            if fpath.is_symlink():
+                continue
+            low = fname.lower()
+            if low.endswith((".min.js", ".min.css")):
+                continue
+            if re.match(r"^(?:main|polyfills|chunk|scripts|styles)-[A-Za-z0-9_-]{6,}\.(?:js|css)$", fname):
+                continue
+            try:
+                if low.endswith(".php") and php_bin:
+                    b0, b1 = minify_php_file(fpath, php_bin)
+                    total_before += b0
+                    total_after += b1
+                    if b1 < b0:
+                        files_minified += 1
+                elif low.endswith(".css"):
+                    raw = fpath.read_text(encoding="utf-8")
+                    b0 = len(raw.encode("utf-8"))
+                    minified = minify_css(raw)
+                    b1 = len(minified.encode("utf-8"))
+                    if b1 < b0 and minified.count("{") == minified.count("}"):
+                        fpath.write_text(minified, encoding="utf-8")
+                        total_before += b0
+                        total_after += b1
+                        files_minified += 1
+                    else:
+                        total_before += b0
+                        total_after += b0
+                elif low.endswith((".js", ".mjs")):
+                    raw = fpath.read_text(encoding="utf-8")
+                    b0 = len(raw.encode("utf-8"))
+                    minified = strip_js_comments(raw)
+                    tmp = fpath.with_name(".sarah_tmp_" + fname)
+                    tmp.write_text(minified, encoding="utf-8")
+                    valid = True
+                    if node_bin:
+                        chk = subprocess.run([node_bin, "--check", str(tmp)], capture_output=True)
+                        if chk.returncode != 0:
+                            valid = False
+                    if valid:
+                        b1 = tmp.stat().st_size
+                        if b1 < b0:
+                            os.replace(tmp, fpath)
+                            total_before += b0
+                            total_after += b1
+                            files_minified += 1
+                        else:
+                            tmp.unlink(missing_ok=True)
+                            total_before += b0
+                            total_after += b0
+                    else:
+                        tmp.unlink(missing_ok=True)
+                        total_before += b0
+                        total_after += b0
+                elif low.endswith(".html"):
+                    raw = fpath.read_text(encoding="utf-8")
+                    b0 = len(raw.encode("utf-8"))
+                    minified = minify_html_fragment(raw)
+                    b1 = len(minified.encode("utf-8"))
+                    if b1 < b0:
+                        fpath.write_text(minified, encoding="utf-8")
+                        total_before += b0
+                        total_after += b1
+                        files_minified += 1
+                    else:
+                        total_before += b0
+                        total_after += b0
+                elif low.endswith(".json") and low not in ("package.json", "package-lock.json", "composer.json"):
+                    raw = fpath.read_text(encoding="utf-8")
+                    b0 = len(raw.encode("utf-8"))
+                    obj = json.loads(raw)
+                    minified = json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+                    b1 = len(minified.encode("utf-8"))
+                    if b1 < b0:
+                        fpath.write_text(minified, encoding="utf-8")
+                        total_before += b0
+                        total_after += b1
+                        files_minified += 1
+                    else:
+                        total_before += b0
+                        total_after += b0
+            except Exception:
+                pass
+
+    if files_minified > 0 and total_before > 0:
+        saved_pct = (total_before - total_after) / total_before * 100.0
+        print(f"   -> ⚡ Minified {files_minified} showroom files ({total_before/1024:.1f} KB -> {total_after/1024:.1f} KB, saved {saved_pct:.1f}%).")
+
+
+if __name__ == "__main__":
+    main()
+PYMIN
+}
+
+# ==============================================================================
 # Helper: deploy_site <site_name> <repo_dir> <web_root> [sync_dir]
 # ==============================================================================
 # Sarah's core per-website deployment state machine:
@@ -251,6 +840,10 @@ function deploy_site() {
         --exclude '.gitignore' \
         --exclude 'README.md' \
         "$SYNC_DIR/" "$WEB_ROOT/"
+
+    # Strip Read-Along Teaching Comments & dead whitespace inside `/var/www/<domain>` ONLY,
+    # keeping `/home/michael/raggiesoft-*` and GitHub 100% documented while serving pure speed!
+    minify_showroom "$WEB_ROOT"
 
     # UNIX WEB PERMISSIONS (`chmod 755` vs `chmod 644` + `find ... -exec ... +`):
     #   - `755` (`rwxr-xr-x`) on directories (`-type d`): Nginx (`www-data`) needs the `x` ("execute/traverse") bit to enter folders!

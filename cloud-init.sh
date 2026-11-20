@@ -281,9 +281,9 @@ write_files:
 # ------------------------------------------------------------------------------
 # Each `- ...` item runs sequentially as `root` after `write_files:` completes.
 runcmd:
-  # 1. Install Core Web Stack (Nginx, PHP 8.5 FPM + CLI extensions, Git, jq, UFW firewall)
+  # 1. Install Core Web Stack (Nginx, PHP 8.5 FPM + CLI extensions, Python 3 for Sarah's minifier & IndexNow, Git, jq, UFW firewall)
   - apt-get update -y
-  - apt-get install -y nginx php-fpm php-cli php-common php-xml php-curl php-mbstring php-zip unzip curl git jq ufw
+  - apt-get install -y nginx php-fpm php-cli php-common php-xml php-curl php-mbstring php-zip python3 unzip curl git jq ufw
   
   # 2. Harden UFW (Uncomplicated Firewall): deny all inbound ports except SSH (22) and HTTP/HTTPS (80/443)
   - ufw default deny incoming
