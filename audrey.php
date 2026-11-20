@@ -1,35 +1,41 @@
 <?php
 /**
- * Architectural Block: audrey.php
- * ===================================
- * Audrey ("The Production Coordinator") is a standalone, single-file PHP application
- * serving as a metadata intake workbench for music releases. It generates structured
- * `album.json` and `tracks.json` assets used by the Stardust Engine.
+ * ============================================================================
+ * Architectural Block: audrey.php — Studio Metadata Intake Workbench
+ * ============================================================================
+ * PLAIN-ENGLISH OVERVIEW (100-LEVEL INTRO):
+ *   Hand-typing JSON files (`album.json` and `tracks.json`) for a 20-track
+ *   double-disc rock opera is prone to missing commas or quote typos!
+ *   Audrey ("The Production Coordinator") is a self-contained, single-file
+ *   local PHP web app (PHP + CSS + HTML + Vanilla JavaScript in one file with
+ *   zero external libraries) that renders an accessible Frutiger Aero form in
+ *   your browser (`php -S localhost:8000` -> `http://localhost:8000/audrey.php`).
+ *   When you fill out the album & multi-disc track rows and click "Compile",
+ *   PHP formats valid Schema.org JSON-LD payloads ready to paste into your
+ *   new album folder before running `harper.sh`!
  *
- * Key Responsibilities:
- * 1. Form Intake: Provides a Frutiger Aero themed web GUI for data entry.
- * 2. Schema Mapping: Maps user inputs directly into Schema.org `MusicAlbum` and `MusicGroup` JSON-LD standards.
- * 3. Track Reconstruction: Parses dynamic POST arrays to assemble multi-disc track listings.
- * 4. Output Generation: Produces formatted JSON payloads ready for copy-pasting into project directories.
- *
- * Maintenance Notes:
- * - This file mixes PHP logic, inline CSS, and vanilla JS for portability (zero dependencies).
- * - If Schema.org standards for `MusicAlbum` evolve, update the `$albumData` array structure.
- * - The dynamic track form rows rely on a JS counter (`sequentialCounter`). If the DOM structure
- *   of the track block changes, ensure the `name="tracks[...][...]"` attribute matrix remains intact.
+ * HOW A SINGLE-FILE PHP WEB PAGE WORKS:
+ *   1. `<?php ... ?>` on Line 1 runs on the **server** (local PHP CLI server)
+ *      BEFORE any HTML is sent to the browser.
+ *   2. On first visit (`GET` request), `$_SERVER["REQUEST_METHOD"]` is `"GET"`,
+ *      so PHP skips the `if (... == "POST")` block and sends the empty HTML form.
+ *   3. When you click `type="submit"`, the browser sends an HTTP `POST` request
+ *      back to `audrey.php`; PHP reads `$_POST[...]`, builds `$albumJsonOut` and
+ *      `$tracksJsonOut` via `json_encode()`, and renders the `<textarea>` boxes!
+ * ============================================================================
  */
 
-// audrey.php - Audrey: The Production Coordinator (v1.1.0)
-// Self-contained Frutiger Aero Media Workbench for multi-disc studio releases.
-
+// Initialize output strings so `GET` page loads start with clean empty state
 $message = "";
 $albumJsonOut = "";
 $tracksJsonOut = "";
 
-// Process the form submission
+// Process form submission when the browser submits `<form method="POST">`
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    // 1. Map core album details to Schema.org standards.
-    // Falls back to safe defaults (e.g., 'DistroKid', 'Pending Distribution') if empty.
+    // 1. Map core album form inputs into a PHP associative array (`"key" => $value`)
+    //    matching Schema.org `MusicAlbum` JSON-LD (`@context`, `@type`, `byArtist`, etc.).
+    //    `??` is PHP's **Null-Coalescing Operator**: `$_POST['genre'] ?? ''` safely returns
+    //    `''` if that form field wasn't submitted, preventing "Undefined array key" warnings!
     $albumData = [
         "@context" => "https://schema.org",
         "@type" => ["MusicAlbum", "Product"],
@@ -38,6 +44,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             "@type" => "MusicGroup",
             "name" => $_POST['artist_name'] ?? ''
         ],
+        // HTML checkboxes only appear in `$_POST` when checked (`isset(...)` -> `true`/`false`)
         "isRockOpera" => isset($_POST['is_rock_opera']) ? true : false,
         "albumProductionType" => $_POST['production_type'] ?? 'StudioAlbum',
         "albumReleaseType" => $_POST['release_type'] ?? 'AlbumRelease',
@@ -54,16 +61,18 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         "creativeWorkStatus" => $_POST['work_status'] ?? 'Upcoming Release'
     ];
 
-    // 2. Map Multi-Disc Track Listing Arrays from dynamic inputs.
+    // 2. Reconstruct Multi-Disc Track Listing (`tracks.json`):
+    //    Because JavaScript names each row's inputs `name="tracks[0][title]"`, `name="tracks[1][title]"`,
+    //    PHP automatically parses `$_POST['tracks']` into a nested 2D array of track dictionaries!
     $tracksData = ["tracks" => []];
     
-    // Ensure the track array exists and iterate over submitted rows.
     if (isset($_POST['tracks']) && is_array($_POST['tracks'])) {
         foreach ($_POST['tracks'] as $track) {
-            // Skip empty/malformed rows
+            // Skip blank rows where no song title was entered
             if (empty($track['title'])) continue;
             
-            // Build the track object, casting disc and track numbers to integers.
+            // `$array[] = ...` appends to the end of a PHP array (like `.push()` in JS or `.append()` in Python).
+            // `(int)` casts string form values (`"1"`) into real JSON numbers (`1`), and `.` concatenates strings in PHP!
             $tracksData['tracks'][] = [
                 "fileName" => $track['file_name'] ?? '',
                 "title" => $track['title'] ?? '',
@@ -81,7 +90,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         }
     }
 
-    // Output formatted JSON string payloads.
+    // Serialize PHP arrays into indented JSON strings (`JSON_UNESCAPED_SLASHES` keeps `https://` readable instead of `https:\/\/`)
     $albumJsonOut = json_encode($albumData, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
     $tracksJsonOut = json_encode($tracksData, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
     
@@ -95,7 +104,13 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Audrey // Studio Intake Workbench</title>
     <style>
-        /* --- RAGGIESOFT FRUTIGER AERO CORE PALETTE --- */
+        /* =====================================================================
+         * CSS ARCHITECTURE: CUSTOM PROPERTIES (`--var`) & AUTOMATIC DARK MODE
+         * =====================================================================
+         * `:root` defines light-mode colors once as reusable variables (`var(--bs-body-bg)`),
+         * and `@media (prefers-color-scheme: dark)` automatically swaps those variables
+         * whenever the user's macOS/Windows/Linux OS theme is set to Dark Mode!
+         */
         :root {
             --mpr-blue-500: #0082E6;
             --mpr-blue-600: #005BB5;
@@ -247,7 +262,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             color: var(--bs-body-color);
         }
 
-        /* --- ACCESSIBLE FORM HANDLING --- */
+        /* --- ACCESSIBLE 12-COLUMN CSS GRID FORM LAYOUT --- */
         .form-grid {
             display: grid;
             grid-template-columns: repeat(12, 1fr);
@@ -258,6 +273,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         .col-6 { grid-column: span 6; }
         .col-12 { grid-column: span 12; }
 
+        /* Responsive mobile stack: below 768px viewport width, every field spans all 12 columns */
         @media (max-width: 768px) {
             .col-4, .col-6 { grid-column: span 12; }
         }
@@ -349,7 +365,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             color: var(--bs-body-color);
         }
 
-        /* REDUCED MOTION SAFE ENVIRONMENT */
+        /* Accessibility (`prefers-reduced-motion`): only animate hover transitions if the OS user allows motion */
         @media (prefers-reduced-motion: no-preference) {
             .btn, input, select, textarea {
                 transition: all 0.2s ease-in-out !important;
@@ -411,6 +427,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
     <main class="main-container">
         
+        <?php /* PHP alternate template syntax (`if (...): ... endif;`) conditionally renders HTML */ ?>
         <?php if ($message === "SUCCESS"): ?>
             <div class="hud-panel hud-success" role="alert">
                 <h2>✨ Master Tracks Pressed Successfully</h2>
@@ -470,7 +487,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             <button type="submit" class="btn btn-primary" style="width: 100%; padding: 15px; font-size: 1.1rem; text-transform: uppercase;">Compile Project Parameters</button>
         </form>
 
-        <!-- SECTION 3: CODE OUTPUT VAULTS -->
+        <!-- SECTION 3: CODE OUTPUT VAULTS (`htmlspecialchars()` escapes `<`/`>`/`&` to prevent HTML injection / XSS!) -->
         <?php if ($_SERVER["REQUEST_METHOD"] == "POST"): ?>
             <section class="hud-panel" style="margin-top: 40px;">
                 <h2>3. Extracted Core Code Assets</h2>
@@ -491,8 +508,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     </main>
 
     <script>
+        // Monotonically increasing index (`0, 1, 2, ...`) so every dynamically appended track row
+        // gets unique HTML `id` attributes AND unique `name="tracks[i][field]"` PHP POST array keys!
         let sequentialCounter = 0;
 
+        // Appends a new Disc 1 or Disc 2 track card to `#trackAssemblyFloor` without wiping values typed in earlier rows
+        // (`insertAdjacentHTML('beforeend', ...)` parses and appends only the new HTML fragment, unlike `innerHTML += ...`!)
         function appendTrack(discNumber) {
             $floor = document.getElementById('trackAssemblyFloor');
             
@@ -562,7 +583,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             sequentialCounter++;
         }
 
-        // Initialize setup with a starting track field
+        // Seed the empty form with Track #1 on Disc 1 automatically as soon as the browser finishes loading the DOM
         window.onload = function() { appendTrack(1); };
     </script>
 </body>

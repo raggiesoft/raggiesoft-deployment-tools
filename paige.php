@@ -3,36 +3,50 @@
  * =============================================================================
  * Architectural Block: raggiesoft-deployment-tools/paige.php
  * =============================================================================
- * Component: Paige — The Literary Editor & Safe Person (PHP 8.5)
+ * Component: Paige — The Literary Editor & Safe Person (PHP 8.5 CLI Compiler)
  * Location:  /raggiesoft-deployment-tools/paige.php
  *
  * --- PAIGE: THE LITERARY EDITOR (v7 - PHP 8.5 Edition) ---
  * "I am Michael's sister. I process his books, and I keep him safe."
  *
- * PRIMARY DIRECTIVE:
- *     Paige ingests raw Markdown narratives (`e*` eras, `c*` chapters, `p*.md` parts)
- *     and `ovab.json` manifests from `raggiesoft-narratives/books/`, synchronizes
- *     clean assets to `raggiesoft-assets/raggiesoft-books/books/`, compiles route maps
- *     for the Ocean View Archives Book Reader (`raggiesoft.com/subdomains/books`),
- *     generates `toc.json` and `catalog.json`, and builds the full-text `search-index.json`.
+ * PLAIN-ENGLISH OVERVIEW (100-LEVEL INTRO):
+ *     Even though PHP is famous for generating HTML on web servers, PHP 8.5 is
+ *     also a fast, batteries-included **Command-Line Compiler** (`php paige.php`)!
+ *     Authors write Ocean View Archives & Story Crossroads novels as plain-text
+ *     Markdown files organized in folders:
+ *       `raggiesoft-narratives/books/<slug>/e001/c001/p001.md`
+ *       (`e` = Era, `c` = Chapter, `p` = Part, plus `ovab.json`, `arcs.json`,
+ *        and optional `crossroads.json` + `paths/<route-id>/e001/c001/p001.md`).
+ *
+ *     When `jenna-sync.sh --push` (or a human author) invokes `paige.php`, Paige
+ *     reads all of those Markdown manuscripts and compiles EVERY data file needed
+ *     by `books.raggiesoft.com` (Web SPA), `backstage.raggiesoft.com`, and the
+ *     native macOS/iOS SwiftUI & Windows .NET 10 WPF **Book Reader** apps:
+ *       1. Syncs clean `.md` manuscripts to `raggiesoft-assets/raggiesoft-books/books/<slug>/`
+ *          while preserving Pandoc/WeasyPrint `.epub` & `.pdf` eBook files (`rrmdir`).
+ *       2. Parses YAML frontmatter (`--- ... ---`), counts readable words/illustrations,
+ *          and traverses `e* -> c* -> p*.md` folders (`$compileEraTree`).
+ *       3. Compiles **Story Crossroads** interactive branching novels (`crossroads.json`)
+ *          into a Directed Acyclic Graph (`segments`) and enforces an automated
+ *          Anti-Bleed Gate so alternate storylines never leak terms or links!
+ *       4. Compiles **Story Arcs** (`arcs.json`), interleaving chapter parts with
+ *          behind-the-scenes **Backstage** bonus dossiers (`story-arcs.json`).
+ *       5. Emits per-book `toc.json`, Ocean View route maps (`data/routes/<slug>.json`),
+ *          and compressed `<slug>-package.7z` bundles for instant offline app downloads.
+ *       6. Emits library-wide `catalog.json`, `library-stats.json`, `ebook-sizes.json`,
+ *          `search-index.json` (full-text search), Wikipedia-style hovercard previews
+ *          (`link-previews.json`, including `music://` Listening Room cards!), and
+ *          categorized Google/Bing XML sitemaps (`sitemap.xml` + `sitemaps/*.xml`)!
+ *       7. Immediately after `paige.php` finishes in `jenna-sync.sh`, Jenna runs
+ *          `raggiesoft-narratives/scripts/compile_ebooks.php`, which invokes **Pandoc**
+ *          and **WeasyPrint** to render Illustrated & Text-Only `.epub` and `.pdf` eBooks!
  *
  * SECONDARY DIRECTIVE (SAFETY PROTOCOL / DEEP PRESSURE THERAPY):
  *     Paige is designated as Michael's "Safe Person."
  *     If execution complexity spikes or the workflow becomes overwhelming,
- *     Paige initiates "Deep Pressure Protocol":
+ *     Paige initiates "Deep Pressure Protocol" (`--grounding` / `--safe-person`):
  *     She stands close, offers grounding hugs, and remains by his side
  *     until regulation is achieved. She does not leave.
- *
- * Design Principles:
- *     - Trauma-Informed Console UX: Replaces harsh compiler output with calm,
- *       reassuring feedback so build operations remain regulating and predictable.
- *     - Non-Destructive eBook Preservation: `rrmdir()` prunes stale Markdown scenes
- *       from the target CDN directory while strictly preserving compiled `.epub`,
- *       `.pdf`, and `.ebook_build_hash` deliverables.
- *     - Ocean View Archives Route Deployment: Outputs route JSON maps directly to the
- *       standalone Ocean View Archives reader (`/raggiesoft.com/subdomains/books/data/routes/`).
- *     - Integrated Full-Text Search Indexing: Automatically crawls all eras (`e*`),
- *       chapters (`c*`), and scenes (`s*.md`) to build `search-index.json`.
  *
  * CLI Usage:
  *     php raggiesoft-deployment-tools/paige.php
@@ -41,7 +55,10 @@
  * =============================================================================
  */
 
-// Parse optional CLI flags for targeted book builds or Deep Pressure grounding
+// HOW PHP `getopt()` PARSES COMMAND-LINE FLAGS:
+//   - Argument 1 (`''`) is for single-letter flags (none used here).
+//   - Argument 2 (`[...]`) defines `--long` flags: a trailing colon `'book:'` means
+//     `--book=<slug>` requires a string value, whereas `'grounding'` (no colon) is a boolean switch!
 $cliOptions = getopt('', ['book:', 'grounding', 'safe-person', 'help']);
 
 if (isset($cliOptions['help'])) {
@@ -64,7 +81,8 @@ $requestedBookSlug = isset($cliOptions['book']) ? trim((string)$cliOptions['book
 echo "👩‍🏫 PAIGE: Hi Michael. I'm right here with you. Ready to read and publish your manuscripts whenever you are.\n";
 echo "   Resolving workspace and library paths...\n";
 
-// Resolve base paths relative to ~/Developer/raggiesoft-deployment-tools/paige.php
+// Resolve base paths relative to `__DIR__` (PHP magic constant holding the exact directory of `paige.php`):
+// `dirname(__DIR__)` steps up one directory (`~/Developer`), and `? :` is PHP's ternary conditional operator.
 $parentRoot     = dirname(__DIR__);
 $serverRoot     = is_dir($parentRoot . '/raggiesoft-servers')
     ? ($parentRoot . '/raggiesoft-servers')
@@ -80,22 +98,29 @@ $booksAppDir    = is_dir($serverRoot . '/raggiesoft.com/subdomains/books')
     : ($serverRoot . '/raggiesoft-book-library');
 $newRoutesDestDir = $booksAppDir . '/data/routes';
 
-// Validate source directory existence with gentle, trauma-informed feedback
+// `fwrite(STDERR, ...)` writes errors to Standard Error (file descriptor 2) rather than stdout, and `exit(1)` signals failure.
 if (!is_dir($sourceBooksDir)) {
     fwrite(STDERR, "   ⚠️  PAIGE: I can't seem to find the narratives folder at {$sourceBooksDir}. Take your time, we can check the path together.\n");
     exit(1);
 }
 
-// Ensure destination directories exist
+// `mkdir($path, 0755, true)`: third argument `true` works like Unix `mkdir -p`, creating parent folders recursively!
 if (!is_dir($assetDestDir)) mkdir($assetDestDir, 0755, true);
 if (!is_dir($newRoutesDestDir)) mkdir($newRoutesDestDir, 0755, true);
 if (!is_dir(dirname($indexDestFile))) mkdir(dirname($indexDestFile), 0755, true);
 
 /**
- * Recursively removes a directory and its contents, preserving compiled eBook deliverables.
+ * Recursively removes stale `.md`/`.json` files from a target CDN book folder BEFORE copying fresh ones,
+ * while strictly preserving heavy Pandoc/WeasyPrint deliverables (`.epub`, `.pdf`, `.7z`, `.ebook_build_hash`).
+ *
+ * PHP IDIOMS EXPLAINED:
+ *   - `scandir($dir)` returns `['.', '..', 'e001', ...]`, so `array_diff(..., ['.', '..'])` strips `.` and `..`
+ *     (never recurse on `.` or `..`, or you would loop infinitely or walk up into parent folders!).
+ *   - `@` in `@unlink($path)` suppresses non-fatal OS warnings if a file was already removed.
+ *   - `in_array($needle, $haystack, true)`: `true` enables strict `===` type comparison in PHP!
  *
  * @param string $dir Target directory to prune.
- * @param array $excludeExtensions File extensions to keep (e.g., ['epub', 'pdf']).
+ * @param array $excludeExtensions File extensions to keep (e.g., ['epub', 'pdf', '7z']).
  * @param array $excludeFiles Specific filenames to keep (e.g., ['.ebook_build_hash']).
  */
 function rrmdir($dir, $excludeExtensions = ['epub', 'pdf', '7z'], $excludeFiles = ['.ebook_build_hash']) {
@@ -110,7 +135,7 @@ function rrmdir($dir, $excludeExtensions = ['epub', 'pdf', '7z'], $excludeFiles 
                 } else {
                     $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
                     if (in_array($ext, $excludeExtensions, true) || in_array($file, $excludeFiles, true)) {
-                        // Preserve compiled e-books and incremental build hashes
+                        // Preserve compiled Pandoc e-books and incremental build hashes!
                         continue;
                     }
                     @chmod($path, 0777);
@@ -118,12 +143,11 @@ function rrmdir($dir, $excludeExtensions = ['epub', 'pdf', '7z'], $excludeFiles 
                 }
             }
         }
-        // Only remove directory if it is completely empty after pruning
+        // Only remove the directory itself if 0 preserved files (like `.epub`) remain inside
         $remaining = @scandir($dir);
         if ($remaining !== false && count(array_diff($remaining, ['.', '..'])) === 0) {
             @chmod($dir, 0777);
             if (!@rmdir($dir)) {
-                // Slight delay and retry in case of filesystem locks
                 usleep(50000);
                 @rmdir($dir);
             }
@@ -132,7 +156,8 @@ function rrmdir($dir, $excludeExtensions = ['epub', 'pdf', '7z'], $excludeFiles 
 }
 
 /**
- * Recursively copies a directory to a destination.
+ * Recursively copies source manuscript files (`$src` -> `$dst`), skipping internal
+ * author-only `BRANCH-CANON.md` notes and macOS `.DS_Store` metadata files.
  *
  * @param string $src Source path.
  * @param string $dst Destination path.
@@ -153,7 +178,8 @@ function rcopy($src, $dst) {
 }
 
 /**
- * Transforms a string into a URL-friendly slug.
+ * Converts a human title (`"Chapter 1: The Crucible!"`) into a clean URL slug (`"chapter-1-the-crucible"`).
+ * Uses `mb_strtolower` ("multibyte" UTF-8 safe lowercase) and `/u` Unicode regex mode.
  *
  * @param string $string Input title or folder name.
  * @return string Clean lowercase hyphenated slug.
@@ -164,11 +190,9 @@ function slugify($string) {
 }
 
 /**
- * Formats a raw byte count into a pleasant, human-readable file size string
- * (e.g., "36.8 MB", "2.8 MB", "690 KB", "5.3 KB") for eBook download links.
- *
- * @param int $bytes Raw file size in bytes.
- * @return string Pleasant human-readable size string, or empty string if invalid.
+ * Formats a raw byte count (`1024` bytes = `1 KB`, `1048576` = `1 MB`, `1073741824` = `1 GB`)
+ * into a clean consumer-friendly label (`"36.8 MB"`, `"690 KB"`) for eBook download buttons.
+ * Notice PHP 8 type hints (`int $bytes` parameter type and `: string` return type)!
  */
 function formatEbookFileSize(int $bytes): string {
     if ($bytes <= 0) {
@@ -197,11 +221,9 @@ function formatEbookFileSize(int $bytes): string {
 
 /**
  * Inspects a compiled book asset directory and returns human-readable and raw byte
- * file sizes for all 4 eBook deliverables (Illustrated EPUB/PDF + Text-Only EPUB/PDF).
- *
- * @param string $bookAssetDir Path to `raggiesoft-assets/raggiesoft-books/books/<slug>`.
- * @param string $seriesSlug   Canonical series slug.
- * @return array Associative array of formatted strings and byte counts.
+ * file sizes for all 5 deliverables: Illustrated EPUB/PDF, Text-Only EPUB/PDF (built by
+ * `compile_ebooks.php` via Pandoc + WeasyPrint), and `<slug>-package.7z` (built below!).
+ * `clearstatcache()` flushes PHP's internal `filesize()` cache so newly generated `.7z` sizes read accurately!
  */
 function getSeriesEbookSizes(string $bookAssetDir, string $seriesSlug): array {
     clearstatcache();
@@ -237,10 +259,7 @@ function getSeriesEbookSizes(string $bookAssetDir, string $seriesSlug): array {
 }
 
 /**
- * Resolves the cross-platform 7-Zip executable path (matching harper.sh's 01-init.sh
- * discovery logic across Windows 7za.exe and macOS/Linux 7zz).
- *
- * @return string|null Absolute path or command name for 7-Zip, or null if unavailable.
+ * Resolves the cross-platform 7-Zip executable (`?string` means "returns `string` or `null`").
  */
 function resolveSevenZipBinary(): ?string {
     $localToolsDir = __DIR__ . '/build-tools/7zip';
@@ -264,12 +283,10 @@ function resolveSevenZipBinary(): ?string {
 }
 
 /**
- * Packages a compiled book asset directory (`toc.json`, `ovab.json`, `landing.md`,
- * and all `e*` era/chapter/part Markdown folders) into `<slug>-package.7z` for
- * instant one-shot offline downloading in the RaggieSoft Book Reader desktop & mobile apps.
- *
- * @param string $bookAssetDir Path to `raggiesoft-assets/raggiesoft-books/books/<slug>`.
- * @param string $seriesSlug   Canonical series slug.
+ * Packages `toc.json`, `ovab.json`, `landing.md`, and all `e*` Markdown chapters into a
+ * solid LZMA2 `<slug>-package.7z` archive (`-t7z -mx=7 -ms=on`) so native desktop/mobile
+ * Book Reader apps can download an entire 300-part novel in ONE HTTP request instead of 300!
+ * `escapeshellarg()` safely quotes every shell argument, and `-xr!*.epub` excludes heavy eBooks.
  */
 function buildSeriesSevenZipPackage(string $bookAssetDir, string $seriesSlug): void {
     $sevenZip = resolveSevenZipBinary();
@@ -290,12 +307,10 @@ function buildSeriesSevenZipPackage(string $bookAssetDir, string $seriesSlug): v
 }
 
 /**
- * Counts readable prose words in a Markdown string after stripping YAML frontmatter,
- * Markdown image tags, link URLs, HTML tags, and structural symbols.
- *
- * @param string $markdownText     Raw Markdown or plain text.
- * @param bool   $stripFrontmatter Whether to remove a leading `--- ... ---` block.
- * @return int Exact readable word count.
+ * Counts readable prose words in Markdown after stripping YAML frontmatter (`--- ... ---`),
+ * image tags `![alt](url)`, link URLs `[label](url)` -> `label`, and HTML/Markdown symbols.
+ * Uses Unicode property classes `\p{L}` (any international letter) and `\p{N}` (digits)
+ * so accented names (`Zoë`, `Chloé`, `Sainte-Claire`) count accurately as single words!
  */
 function countReadableProseWords(string $markdownText, bool $stripFrontmatter = true): int {
     $text = $markdownText;
@@ -316,10 +331,10 @@ function countReadableProseWords(string $markdownText, bool $stripFrontmatter = 
 }
 
 /**
- * Counts readable words inside a `.docx` OpenXML document archive (`word/document.xml`).
- *
- * @param string $docxPath Absolute path to the `.docx` file.
- * @return int Readable word count.
+ * Counts readable words inside a Microsoft Word `.docx` file without needing Pandoc!
+ * HOW THIS WORKS: Every `.docx` file since Office 2007 is secretly a standard `.zip`
+ * archive containing XML files—with the main body text stored inside `word/document.xml`!
+ * PHP's `ZipArchive` reads `word/document.xml` straight out of memory and strips XML tags.
  */
 function countDocxWords(string $docxPath): int {
     if (!class_exists('ZipArchive') || !is_file($docxPath)) {
@@ -342,12 +357,11 @@ function countDocxWords(string $docxPath): int {
 }
 
 /**
- * Recursively computes the deduplicated, curated canonical lore word count inside a
- * narrative lore folder (excluding legacy `_old/`, `ai-dump/`, raw AI chat transcripts,
- * and monolithic backup files when structured `chunks/` exist).
- *
- * @param string $folderPath Absolute path to a lore directory.
- * @return int Curated canonical lore word count.
+ * Recursively computes the deduplicated canonical lore word count inside a lore folder:
+ *   - Skips `_old/`, `ai-dump/`, Word lockfiles (`~$*.docx`), and raw AI chat logs.
+ *   - Computes a `sha256` cryptographic hash of every file (`$seenHashes[$hash]`) so
+ *     identical files are NEVER double-counted, and skips `.docx` files when a matching
+ *     `.md` stem (`$seenStems[$stem]`) was already counted!
  */
 function computeCuratedLoreFolderWords(string $folderPath): int {
     if (!is_dir($folderPath)) {
@@ -787,10 +801,13 @@ foreach ($narrativeDirs as $narrativeDir) {
      * both for the primary novel root (`books/<slug>/e*`) and for coequal
      * Story Crossroads path trees (`books/<slug>/paths/<path-id>/e*`).
      *
-     * Automatically registers all Era TOC, Chapter TOC, and Part reader routes,
-     * indexes full-text search entries and hovercard link previews, and marks
-     * every `.md` part in `$seriesPartAbsPaths` so Story Crossroads chapters
-     * are counted strictly as readable story prose rather than internal lore.
+     * HOW PHP CLOSURES & `use (&$var)` WORK (100-LEVEL PHP LESSON):
+     *   Unlike JavaScript/Python where inner functions automatically capture
+     *   outer variables, PHP closures explicitly list outer variables in `use (...)`:
+     *     - `&$routeData` (with `&` = **pass-by-reference**): Mutations inside this
+     *       function directly update the outer `$routeData`, `$searchIndex`, and
+     *       word/illustration counters!
+     *     - `$seriesSlug` (no `&` = **pass-by-value**): Read-only copy of outer string.
      */
     $compileEraTree = function (
         string $scanRootDir,
@@ -816,17 +833,19 @@ foreach ($narrativeDirs as $narrativeDir) {
         $serverRoot
     ): array {
         $compiledEras = [];
+        // Level 1 of 3: Discover `e001`, `e002`, ... Era folders (`GLOB_ONLYDIR` ignores files)
         $bDirs = glob($scanRootDir . '/e*', GLOB_ONLYDIR) ?: [];
-        sort($bDirs); // Ensure sequential processing
+        sort($bDirs); // Alphabetical sort keeps zero-padded `e001..e099` strictly chronological!
 
         foreach ($bDirs as $bIndex => $bDir) {
             $bName = basename($bDir);
+            // `str_replace('e', '', 'e004')` -> `'004'`, and `intval('004')` -> integer `4`
             $eraNum = intval(str_replace('e', '', $bName));
 
             $eraTitle = "Era {$eraNum}";
             $metaPath = $bDir . '/ovab.json';
 
-            // Load local ovab.json title
+            // Load human-readable Era title from `eXXX/ovab.json` if present
             if (file_exists($metaPath)) {
                 $meta = json_decode(file_get_contents($metaPath), true);
                 if (isset($meta['title'])) $eraTitle = $meta['title'];
@@ -867,7 +886,7 @@ foreach ($narrativeDirs as $narrativeDir) {
                 $tocEra['path_id'] = $pathId;
             }
 
-            // Auto-discover chapter directories based on 'c*' naming convention
+            // Level 2 of 3: Auto-discover Chapter directories (`c001`, `c002`, ...) inside this Era
             $cDirs = glob($bDir . '/c*', GLOB_ONLYDIR) ?: [];
             sort($cDirs);
 
@@ -879,7 +898,7 @@ foreach ($narrativeDirs as $narrativeDir) {
                 $chapTitle = "Chapter {$chapNum}";
                 $metaPath = $cDir . '/ovab.json';
 
-                // Resolve chapter title from local ovab.json
+                // Resolve chapter title from local `cXXX/ovab.json`
                 if (file_exists($metaPath)) {
                     $meta = json_decode(file_get_contents($metaPath), true);
                     if (isset($meta['title'])) $chapTitle = $meta['title'];
@@ -920,7 +939,7 @@ foreach ($narrativeDirs as $narrativeDir) {
                     $tocChap['path_id'] = $pathId;
                 }
 
-                // Auto-discover individual part markdown files strictly based on 'p*.md'
+                // Level 3 of 3: Auto-discover individual Part Markdown files (`p001.md`, `p002.md`, ...)
                 $pFiles = glob($cDir . '/p*.md') ?: [];
                 sort($pFiles);
                 $chapPartCount = count($pFiles);
@@ -941,7 +960,11 @@ foreach ($narrativeDirs as $narrativeDir) {
                     $partContent = file_get_contents($pFile);
                     $bodyWithoutFrontmatter = $partContent;
 
-                    // Extract title, scene metadata, and illustrations from part's YAML frontmatter
+                    // HOW PAIGE PARSES YAML FRONTMATTER (`--- ... ---`):
+                    //   Every `pXXX.md` starts with a `---` metadata block at the top containing
+                    //   `title:`, `date:`, `start_time:`, `location:`, `pov:`, `image:`/`images:`, etc.
+                    //   `preg_match('/^---([\s\S]*?)---/', ...)` captures everything inside `--- ... ---`
+                    //   into `$matches[1]` (`$frontmatterRaw`) and strips it off `$bodyWithoutFrontmatter`!
                     if (preg_match('/^---([\s\S]*?)---/', ltrim($partContent), $matches)) {
                         $frontmatterRaw = $matches[1];
                         $bodyWithoutFrontmatter = str_replace($matches[0], '', $partContent);
@@ -981,7 +1004,9 @@ foreach ($narrativeDirs as $narrativeDir) {
                             $partSummary = trim($mSum[1], " \t\n\r\0\x0B\"'");
                         }
 
-                        // Parse frontmatter `image:` / `images:` and `image_alt:` / `image_alts:` (scalar or YAML list)
+                        // Mini Line-by-Line State Machine for YAML Scalar OR Multi-Item `- ...` Lists:
+                        // Handles both `image: "/foo.jpg"` AND multi-line `images:\n  - "/a.jpg"\n  - "/b.jpg"`
+                        // (plus `image_alt` / `image_alts` and `backstage` dossier links) without needing a C YAML extension!
                         $fmImageUrls = [];
                         $fmImageAlts = [];
                         $fmLines = preg_split('/\r\n|\r|\n/', $frontmatterRaw);
@@ -1030,6 +1055,7 @@ foreach ($narrativeDirs as $narrativeDir) {
                             }
                         }
 
+                        // Normalize `{{CDN}}` / `https://assets.raggiesoft.com` prefixes and verify the `.jpg`/`.png` physically exists on disk!
                         foreach ($fmImageUrls as $idx => $imgUrl) {
                             $normSrc = preg_replace('/#.*$/', '', str_replace(['{{CDN}}', '{{cms}}', 'https://assets.raggiesoft.com'], '', trim($imgUrl)));
                             $cleanRel = ltrim($normSrc, '/');
@@ -1046,7 +1072,7 @@ foreach ($narrativeDirs as $narrativeDir) {
                         }
                     }
 
-                    // Also discover any inline Markdown images (`![alt](url)`) inside the scene body
+                    // Also discover any inline Markdown images (`![alt](url)`) inside the scene body (`PREG_SET_ORDER` groups each match cleanly)
                     if (preg_match_all('/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/', $bodyWithoutFrontmatter, $inlineImgMatches, PREG_SET_ORDER)) {
                         $seenSrcs = array_column($partImages, 'src');
                         foreach ($inlineImgMatches as $inlineMatch) {
@@ -1068,7 +1094,7 @@ foreach ($narrativeDirs as $narrativeDir) {
                         }
                     }
 
-                    // Smart Polish (Option 1 + Idea 3):
+                    // Smart Polish:
                     // - When a Chapter has 2+ Parts (or explicit Part > 1), display "Part X: <Title>".
                     // - When a Chapter has only 1 Part (`p001.md`), omit the redundant "Part 1:" prefix.
                     $partTitle = ($chapPartCount > 1 || $partNum > 1)
@@ -1105,13 +1131,13 @@ foreach ($narrativeDirs as $narrativeDir) {
                     $eraIllustrationCount += $partImgCount;
                     $seriesIllustrationCount += $partImgCount;
 
-                    // Clean the part body text and add to the full-text search index
+                    // Strip HTML and Markdown syntax from `$bodyWithoutFrontmatter` to build the plain-text `$searchIndex` entry
                     $cleanBody = strip_tags($bodyWithoutFrontmatter);
                     $cleanBody = preg_replace('/[#_*\[\]>]/', '', $cleanBody);
                     $cleanBody = preg_replace('/\s+/', ' ', $cleanBody);
                     $cleanBody = trim($cleanBody);
 
-                    // Extract a clean 1-2 sentence excerpt (~210 characters) for Wikipedia-style hovercard previews
+                    // Extract a clean ~215-character excerpt cut neatly on the last space (`mb_strrpos`) for Wikipedia-style hovercards
                     $partExcerpt = $partSummary;
                     if ($partExcerpt === '') {
                         $proseBody = preg_replace('/!\[[^\]]*\]\([^)]*\)/', '', $bodyWithoutFrontmatter);
@@ -1133,7 +1159,7 @@ foreach ($narrativeDirs as $narrativeDir) {
                         }
                     }
 
-                    // Finalize TOC structure with parts, word count telemetry, and illustration manifest
+                    // Finalize TOC structure with parts, word count telemetry (`250` words/min reading pace), and illustration manifest
                     $seriesPartCountTotal++;
                     $realPFile = realpath($pFile);
                     if ($realPFile !== false) {
@@ -1174,7 +1200,7 @@ foreach ($narrativeDirs as $narrativeDir) {
                     }
                     $tocChap['parts'][] = $partEntry;
 
-                    // Index compiled part metadata by relative path (`eXXX/cYYY/pZZZ.md` or `paths/<id>/...`)
+                    // Index compiled part metadata by relative path (`eXXX/cYYY/pZZZ.md` or `paths/<id>/...`) for `O(1)` lookup in `arcs.json` & `crossroads.json`
                     $seriesPartsByRelPath[$relPath] = [
                         'part_num'        => $partNum,
                         'part_title'      => $partTitle,
@@ -1227,7 +1253,7 @@ foreach ($narrativeDirs as $narrativeDir) {
                 $tocChap['word_count'] = $chapWordCount;
                 $tocEra['chapters'][] = $tocChap;
 
-                // Register chapter-level preview card (inheriting first part's image & excerpt)
+                // Register chapter-level preview card (inheriting first illustrated part's artwork & opening excerpt)
                 $chapStandaloneUrl = str_replace('/raggiesoft-books/books', '', $chapRouteUrl);
                 $firstChapPart = $tocChap['parts'][0] ?? null;
                 $chapPreviewImg = '/raggiesoft-books/images/covers/og/' . $seriesSlug . '.jpg';
@@ -1254,7 +1280,7 @@ foreach ($narrativeDirs as $narrativeDir) {
             $tocEra['word_count'] = $eraWordCount;
             $compiledEras[] = $tocEra;
 
-            // Register era-level preview card
+            // Register era-level preview card (`break 2` jumps out of BOTH nested `foreach` loops as soon as the first illustration is found!)
             $eraStandaloneUrl = str_replace('/raggiesoft-books/books', '', $eraRouteUrl);
             $firstEraChap = $tocEra['chapters'][0] ?? null;
             $firstEraPart = $firstEraChap['parts'][0] ?? null;
@@ -1342,7 +1368,9 @@ foreach ($narrativeDirs as $narrativeDir) {
             }
         }
 
-        // Step 2: Assign each valid Crossroads to its container (`""` for root `e*`, or `"paths/<dir>"` for nested branches)
+        // Step 2: Assign each valid Crossroads to its container (`""` for root `e*`, or `"paths/<dir>"` for nested branches).
+        // `fn($a, $b) => strlen($b) <=> strlen($a)` uses PHP's `<=>` ("spaceship") comparison operator
+        // (`-1`, `0`, or `+1`) to sort longest path prefixes first so nested sub-branches match accurately!
         $crossroadsByContainer = [];
         $knownContainerPrefixes = array_keys($containerTrees);
         usort($knownContainerPrefixes, static fn($a, $b) => strlen($b) <=> strlen($a));
@@ -1366,6 +1394,8 @@ foreach ($narrativeDirs as $narrativeDir) {
             $crossroadsByContainer[$matchedContainer][] = $rawCx;
         }
 
+        // Sort multiple sequential Crossroads inside the same container chronologically by `(era_num, chap_num, part_num)`.
+        // Note: `foreach (... as &$cxGroup)` iterates by reference; ALWAYS `unset($cxGroup)` right after a `&` loop in PHP!
         foreach ($crossroadsByContainer as $cKey => &$cxGroup) {
             usort($cxGroup, static function (array $a, array $b): int {
                 $ma = $a['_trig_meta'];
@@ -1377,6 +1407,8 @@ foreach ($narrativeDirs as $narrativeDir) {
         }
         unset($cxGroup);
 
+        // Step 3: Splits an Era/Chapter/Part tree cleanly into `[$preEras, $postEras]` right at `($trigEra, $trigChap, $trigPart)`
+        // so chapters up through the Crossroads trigger belong to the parent segment, and any inline continuation parts belong to `$postEras`.
         $splitErasAtTrigger = static function (array $sourceEras, int $trigEra, int $trigChap, int $trigPart): array {
             $preEras = [];
             $postEras = [];
@@ -1440,6 +1472,9 @@ foreach ($narrativeDirs as $narrativeDir) {
             return [$preEras, $postEras];
         };
 
+        // Step 4: Finalizes one Directed Acyclic Graph (DAG) segment (`"__root__"` or `"<option-id>"`),
+        // wiring `prevUrl`/`nextUrl` navigation links along that branch and casting `(object)$requiredChoices`
+        // so `json_encode` always emits a JSON object `{}` rather than an empty JSON array `[]`!
         $finalizeNarrativeSegment = function (
             string $segmentId,
             array $segEras,
@@ -1556,6 +1591,9 @@ foreach ($narrativeDirs as $narrativeDir) {
             return $segmentRecord;
         };
 
+        // Recursive Graph Slicer: Declaring `$sliceContainerIntoSegments = null;` first and capturing
+        // `&$sliceContainerIntoSegments` by reference allows this PHP closure to call ITSELF recursively
+        // on arbitrarily nested Story Crossroads branches!
         $sliceContainerIntoSegments = null;
         $sliceContainerIntoSegments = function (
             string $containerKey,
@@ -1684,7 +1722,13 @@ foreach ($narrativeDirs as $narrativeDir) {
         $sliceContainerIntoSegments('', $tocBooks, '__root__', [], null, null);
         $trunkEras = $compiledSegmentsMap['__root__']['eras'] ?? $tocBooks;
 
-        // Automated Story Crossroads Anti-Bleed Gate (`forbidden_terms`, `story_path:` YAML, & cross-branch hyperlinks)
+        // Step 5: Automated Story Crossroads Anti-Bleed Gate (`forbidden_terms`, `story_path:` YAML, & cross-branch hyperlinks).
+        // When writing an interactive novel with alternate timelines (e.g., Option A vs. Option B),
+        // an author must NEVER accidentally reference an event/character unique to Option B inside Option A!
+        // Paige enforces 3 hard compile-time checks across every branched `.md` file (`exit(1)` aborts the build on any leak!):
+        //   1. Every file inside `paths/<branch>/` MUST declare `story_path: "<branch>"` in its YAML frontmatter.
+        //   2. Zero lines may match any sibling branch's `forbidden_terms` (unless listed in `allow_in`).
+        //   3. Zero Markdown links `[...](...paths/<other-branch>/...)` may cross into a sibling branch!
         $bleedViolations = [];
         foreach ($compiledSegmentsMap as $segCheckId => $segCheck) {
             if ($segCheckId === '__root__') {
@@ -2195,6 +2239,10 @@ file_put_contents($catalogFile, json_encode($masterCatalog, JSON_PRETTY_PRINT | 
 echo "\n  [Catalog] Master Catalog saved to: {$catalogFile}\n";
 
 // --- COMPILE LIVE LIBRARY-WIDE WORD COUNT & SCALE TELEMETRY (`library-stats.json`) ---
+// Sums deduplicated prose words across shared universe lore (`universal-lore/`, `character-list/`,
+// `rules/`, `backstage/corporations`, `backstage/locations`), standalone band liner notes, and
+// song lyrics—strictly separating `Mapped` artists (`$bookMusicArtistMap`) from `Other` bands so
+// zero words are ever counted twice!
 $universalLoreWords   = computeCuratedLoreFolderWords($narrativesRootDir . '/universal-lore');
 $amayaLoreWords       = computeCuratedLoreFolderWords($narrativesRootDir . '/lore/amaya');
 $rescueGameLoreWords  = computeCuratedLoreFolderWords($narrativesRootDir . '/lore/rescue-game');
@@ -2255,6 +2303,8 @@ foreach ($masterCatalog as $catBook) {
     ];
 }
 
+// Sort books largest-to-smallest by `story_word_count` (`$sb <=> $sa` reverses `<=>` for descending order!),
+// breaking ties by `combined_word_count` for `https://books.raggiesoft.com/stats`.
 usort($statsBooksRows, static function (array $a, array $b): int {
     $sa = (int)($a['word_stats']['story_word_count'] ?? 0);
     $sb = (int)($b['word_stats']['story_word_count'] ?? 0);
@@ -2270,6 +2320,10 @@ $totalCuratedLoreWords = $totalBookLoreWords + $sharedUniverseLoreWords;
 $totalCombinedWords    = $totalStoryWords + $totalCuratedLoreWords;
 $totalWithLyricsWords  = $totalCombinedWords + $totalLyricsWords;
 
+// Industry trade publishing conversions:
+// - `275` words ≈ 1 standard trade paperback page
+// - `15,000` words ≈ 1 hour of comfortable adult reading (`250` words/minute)
+// - `90,000` words ≈ 1 standard contemporary full-length novel
 $libraryStatsPayload = [
     'generated_at'                     => gmdate('c'),
     'volume_count'                     => count($masterCatalog),
@@ -2350,11 +2404,12 @@ if (is_dir(dirname($storyArcsCdnFile))) {
 echo "  [Arcs] Compiled " . count($globalStoryArcs) . " Story Arc playlists saved to: {$storyArcsLocalFile}\n";
 
 // --- STEP B: COMPILE THE LISTENING ROOM (music.raggiesoft.com) HOVERCARD PREVIEWS ---
-// Populate $allLinkPreviews with rich artist, album, track, and playlist entries from
-// `raggiesoft-assets/engine-room-records/catalog.json` so `sophia/oliver.php` can render
-// accurate album artwork (`social-preview.jpg` / `album-art.jpg`), clean track titles,
-// track numbers, durations, and studio liner notes without relying on local disk checks
-// on the production droplet.
+// WHY THIS CROSS-DOMAIN HOVERCARD INDEX EXISTS:
+//   Inside novel prose (especially `books/stardust-engine` and `books/aubrie`), characters
+//   write and perform songs linked to `https://music.raggiesoft.com/<artist>/<album>/<track>`.
+//   When a reader hovers (or taps) a music link inside `books.raggiesoft.com`, `oliver.php`
+//   looks up `music://<artist>/<album>/<track>` in `link-previews.json` to display an instant
+//   Wikipedia-style preview card showing album art, release year, track number, runtime, and studio lore!
 $errCatalogFile = $serverRoot . '/raggiesoft-assets/engine-room-records/catalog.json';
 if (is_file($errCatalogFile)) {
     $errCatalog = json_decode((string)@file_get_contents($errCatalogFile), true) ?: [];
@@ -2630,21 +2685,28 @@ file_put_contents($indexDestFile, json_encode($searchIndex, JSON_UNESCAPED_SLASH
 echo "  [Search] Full-text search index (" . count($searchIndex) . " parts) saved to: {$indexDestFile}\n";
 
 // ============================================================================
-// XML SITEMAPS & ROBOTS.TXT COMPILER FOR RAGGIESOFT BOOK READER
+// SECTION 5: XML SITEMAPS, ROBOTS.TXT & INDEXNOW KEY COMPILER (`books.raggiesoft.com`)
 // ============================================================================
-// Generates `robots.txt`, `sitemap.xml` (Sitemap Index), and 4 categorized child
-// sitemaps (`sitemaps/{editorial,books,chapters,parts}.xml`) inside
-// `raggiesoft.com/subdomains/books` so Google, Bing, and social crawlers can
-// discover every canonical book, era, chapter, and deep manuscript part URL
-// with truthful filesystem `<lastmod>` dates (YYYY-MM-DD).
+// WHY WE SPLIT SITEMAPS INTO A `<sitemapindex>` + 4 CHILD XML FILES:
+//   Search engines (Google, Bing, DuckDuckGo) discover URLs via `/sitemap.xml`.
+//   Because Ocean View Archives contains thousands of deep manuscript Part routes,
+//   splitting them into 4 clean child sitemaps (`editorial.xml`, `books.xml`,
+//   `chapters.xml`, `parts.xml`) referenced by one master `<sitemapindex>` lets search
+//   consoles report indexing coverage separately for marketing pages vs. deep chapters!
+//   Every `<lastmod>` date is derived directly from real filesystem modification times
+//   (`filemtime()`) formatted in UTC ISO-8601 (`YYYY-MM-DD`).
 $booksSubdomainDir = $serverRoot . '/raggiesoft.com/subdomains/books';
 if (is_dir($booksSubdomainDir)) {
     $booksOrigin = 'https://books.raggiesoft.com';
     $sitemapsDir = $booksSubdomainDir . '/sitemaps';
     if (!is_dir($sitemapsDir)) {
+        // `mkdir(..., 0755, true)`: `0755` = owner rwx, world rx; `true` = create parent dirs recursively
         mkdir($sitemapsDir, 0755, true);
     }
 
+    // Closure (`static function` = anonymous function that doesn't bind `$this`):
+    // Finds the newest Unix modification timestamp (`@filemtime($p)`, where `@` suppresses warnings
+    // on race-deleted files) across an array of candidate file paths and formats it in UTC (`gmdate`).
     $getLatestIsoDate = static function (array $paths, string $fallback = '2026-04-01'): string {
         $maxTs = 0;
         foreach ($paths as $p) {
@@ -2658,10 +2720,12 @@ if (is_dir($booksSubdomainDir)) {
         return $maxTs > 0 ? gmdate('Y-m-d', $maxTs) : $fallback;
     };
 
+    // Escapes `&`, `<`, `>`, `"`, and `'` (`ENT_XML1 | ENT_QUOTES`) so every URL is valid XML 1.0:
     $escapeXmlLoc = static function (string $val): string {
         return htmlspecialchars($val, ENT_XML1 | ENT_QUOTES, 'UTF-8');
     };
 
+    // `use ($escapeXmlLoc)` imports the `$escapeXmlLoc` closure from the outer scope into this closure!
     $renderSitemapUrlSet = static function (array $entries) use ($escapeXmlLoc): string {
         $rows = [];
         foreach ($entries as $entry) {
@@ -2670,6 +2734,7 @@ if (is_dir($booksSubdomainDir)) {
         return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n" . implode("\n", $rows) . "\n</urlset>\n";
     };
 
+    // Index `$masterCatalog` by `slug` in an associative map (`O(1)` lookup per route file):
     $booksCatalogBySlug = [];
     foreach ($masterCatalog as $catEntry) {
         if (!empty($catEntry['slug'])) {
@@ -2677,6 +2742,8 @@ if (is_dir($booksSubdomainDir)) {
         }
     }
 
+    // If a PHP view template inside `sophia/` is updated, pages rendered by that template
+    // should reflect whichever date is newer: the Markdown manuscript OR the PHP view template!
     $oliverTplPath   = $booksSubdomainDir . '/sophia/oliver.php';
     $landingTplPath  = $booksSubdomainDir . '/sophia/landing.php';
     $tocTplPath      = $booksSubdomainDir . '/sophia/toc.php';
@@ -2689,12 +2756,15 @@ if (is_dir($booksSubdomainDir)) {
     $partSitemapEntries    = [];
     $globalLatestBookMod   = '2026-04-01';
 
+    // Read every compiled per-book route map (`<slug>.json`) from disk so even books skipped via
+    // `--book=<single-slug>` incremental builds remain 100% present in the global sitemap!
     $routeFilesOnDisk = glob($newRoutesDestDir . '/*.json') ?: [];
     sort($routeFilesOnDisk);
 
     foreach ($routeFilesOnDisk as $rFile) {
         $sSlug = basename($rFile, '.json');
         $catMeta = $booksCatalogBySlug[$sSlug] ?? null;
+        // Skip hidden/unreleased books (`"hide": true` in `ovab.json`):
         if ($catMeta !== null && !empty($catMeta['hide'])) {
             continue;
         }
@@ -2717,7 +2787,9 @@ if (is_dir($booksSubdomainDir)) {
             $rFile
         ]);
 
-        // Pre-scan era & chapter folders on disk for accurate era/chapter `<lastmod>`
+        // Pre-scan linear era (`e*`) & chapter (`c*`) folders on disk so each Era/Chapter TOC
+        // gets the exact `<lastmod>` of the newest `p*.md` file inside that chapter/era!
+        // Note: ISO-8601 `YYYY-MM-DD` strings sort chronologically with normal string `>` comparison!
         $bDirsForMod = glob($bookNarrDir . '/e*', GLOB_ONLYDIR) ?: [];
         sort($bDirsForMod);
         $eraMaxMods = [];
@@ -2739,7 +2811,7 @@ if (is_dir($booksSubdomainDir)) {
             }
             $eraMaxMods[(string)$bIdx] = $eMod;
         }
-        // Also pre-scan any Story Crossroads `paths/<path-id>/e*/c*` folders for accurate `<lastmod>`
+        // Also pre-scan any Story Crossroads branching `paths/<path-id>/e*/c*` folders for accurate `<lastmod>`
         $pathDirsForMod = glob($bookNarrDir . '/paths/*', GLOB_ONLYDIR) ?: [];
         sort($pathDirsForMod);
         foreach ($pathDirsForMod as $pathDirPath) {
@@ -2768,6 +2840,8 @@ if (is_dir($booksSubdomainDir)) {
             $globalLatestBookMod = $bookMaxMod;
         }
 
+        // Classify each route inside `<slug>.json` into the proper child sitemap bucket based on
+        // Paige's virtual `filePath` sentinel tokens (`__SERIES_LANDING__`, `__TOC__`, etc.) vs. real `.md` files:
         foreach ($rMap as $routePath => $rCfg) {
             if ($routePath === 'common' || !is_string($routePath) || !str_starts_with($routePath, '/')) {
                 continue;
@@ -2779,18 +2853,21 @@ if (is_dir($booksSubdomainDir)) {
             }
 
             if ($fp === '__SERIES_LANDING__') {
+                // Book overview landing page -> `books.xml`
                 $tplMod = $getLatestIsoDate([$landingTplPath], $bookMaxMod);
                 $bookSitemapEntries[$cleanPath] = [
                     'loc'     => $booksOrigin . $cleanPath,
                     'lastmod' => max($bookMaxMod, $tplMod)
                 ];
             } elseif ($fp === '__TOC__') {
+                // Full book Table of Contents -> `books.xml`
                 $tplMod = $getLatestIsoDate([$tocTplPath], $bookMaxMod);
                 $bookSitemapEntries[$cleanPath] = [
                     'loc'     => $booksOrigin . $cleanPath,
                     'lastmod' => max($bookMaxMod, $tplMod)
                 ];
             } elseif ($fp === '__ILLUSTRATIONS__') {
+                // Per-book Scene Illustrations gallery (only indexed if the book actually has >= 1 illustration!)
                 if ($sIllusCount > 0) {
                     $tplMod = $getLatestIsoDate([$illusTplPath], $bookMaxMod);
                     $bookSitemapEntries[$cleanPath] = [
@@ -2799,6 +2876,7 @@ if (is_dir($booksSubdomainDir)) {
                     ];
                 }
             } elseif (str_starts_with($fp, '__ERA_TOC__|')) {
+                // Era/Book sub-TOC -> `chapters.xml`
                 $eIdxKey = substr($fp, strlen('__ERA_TOC__|'));
                 $eBaseMod = $eraMaxMods[$eIdxKey] ?? $bookMaxMod;
                 $tplMod = $getLatestIsoDate([$eraTocTplPath], $eBaseMod);
@@ -2807,6 +2885,7 @@ if (is_dir($booksSubdomainDir)) {
                     'lastmod' => max($eBaseMod, $tplMod)
                 ];
             } elseif (str_starts_with($fp, '__CHAP_TOC__|')) {
+                // Multi-part Chapter TOC -> `chapters.xml`
                 $cIdxKey = substr($fp, strlen('__CHAP_TOC__|'));
                 $cBaseMod = $chapMaxMods[$cIdxKey] ?? $bookMaxMod;
                 $tplMod = $getLatestIsoDate([$chapTocTplPath], $cBaseMod);
@@ -2815,7 +2894,9 @@ if (is_dir($booksSubdomainDir)) {
                     'lastmod' => max($cBaseMod, $tplMod)
                 ];
             } else {
-                // Skip any legacy `/part-1-` single-part alias if present in an older route file
+                // Deep Manuscript Part (`.md` file) -> `parts.xml`
+                // Deduplication Guard: For single-part chapters, the canonical URL omits `/part-1-`,
+                // so skip any legacy `/part-1-<slug>` alias if its canonical URL exists in `$rMap`!
                 if (preg_match('#^/(.+)/part-1-([^/]+)$#', $cleanPath, $aliasMatch)) {
                     $canonicalCandidate = '/' . $aliasMatch[1] . '/' . $aliasMatch[2];
                     if (isset($rMap[$canonicalCandidate])) {
@@ -2832,10 +2913,13 @@ if (is_dir($booksSubdomainDir)) {
         }
     }
 
+    // Sort associative arrays alphabetically by URL path (`ksort` = key sort) for deterministic Git diffs:
     ksort($bookSitemapEntries);
     ksort($chapterSitemapEntries);
     ksort($partSitemapEntries);
 
+    // Top-level editorial & library routes -> `editorial.xml`
+    // (`withCatalog => true` bumps `<lastmod>` whenever ANY book in the library updates):
     $editorialRouteDefs = [
         '/'              => ['files' => [$booksSubdomainDir . '/sophia/home.php'],              'withCatalog' => true],
         '/library'       => ['files' => [$booksSubdomainDir . '/sophia/catalog.php'],           'withCatalog' => true],
@@ -2857,6 +2941,7 @@ if (is_dir($booksSubdomainDir)) {
         ];
     }
 
+    // `array_values()` strips string keys into clean 0-indexed lists for `$renderSitemapUrlSet`:
     $childSitemapGroups = [
         'editorial.xml' => array_values($editorialSitemapEntries),
         'books.xml'     => array_values($bookSitemapEntries),
@@ -2864,6 +2949,7 @@ if (is_dir($booksSubdomainDir)) {
         'parts.xml'     => array_values($partSitemapEntries),
     ];
 
+    // Write each child XML sitemap (`sitemaps/*.xml`) and assemble the `<sitemapindex>` rows:
     $sitemapIndexRows = [];
     $totalIndexedBookUrls = 0;
     foreach ($childSitemapGroups as $smFileName => $smEntries) {
@@ -2881,6 +2967,8 @@ if (is_dir($booksSubdomainDir)) {
     $sitemapIndexXml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<sitemapindex xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n" . implode("\n", $sitemapIndexRows) . "\n</sitemapindex>\n";
     file_put_contents($booksSubdomainDir . '/sitemap.xml', $sitemapIndexXml);
 
+    // Emit `robots.txt` welcoming crawlers to all narrative content while excluding reader-local state pages,
+    // plus the static `<KEY>.txt` ownership file verified by Bing/Yandex/DuckDuckGo IndexNow pings!
     $robotsTxt = implode("\n", [
         '# Ocean View Archives — RaggieSoft Book Reader (https://books.raggiesoft.com)',
         '# Free CC BY-SA 4.0 serialized novels, scene illustrations, and lore archives by Michael P. Ragsdale.',

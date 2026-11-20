@@ -2,38 +2,25 @@
 # ==============================================================================
 # Architectural Block: install-subdomains.sh (Idempotent "Skip Existing" Edition)
 # ==============================================================================
-# Purpose:
-#   Safe, idempotent server bootstrap & incremental subdomain provisioning script
-#   designed to be executed as standard user `michael` from `~` (`/home/michael`)
-#   on the RaggieSoft DigitalOcean Droplet (NYC1 - 142.93.244.239).
+# PLAIN-ENGLISH OVERVIEW (100-LEVEL INTRO):
+#   What does **"idempotent"** mean in computer science & DevOps?
+#   An operation is *idempotent* if running it once, twice, or ten times produces
+#   the exact same valid server state without breaking or redoing things that
+#   are already working!
 #
-# Core Idempotency Guarantee ("Skip What Already Exists"):
-#   Every website project added to this script follows a strict non-destructive
-#   skip-existing contract by default:
-#     1. Infrastructure Sync (`raggiesoft-deployment-tools` & `nginx-config`):
-#        Clones if missing or fast-forwards to `origin/main` so the latest
-#        manifests and deployment tools are available locally.
-#     2. Web Roots (`/var/www/*`):
-#        If a web root directory already exists and is populated, it is SKIPPED
-#        untouched (never running recursive `chown -R` or `chmod -R 755` over
-#        live 644 production assets). Only missing or empty `/var/www/*` folders
-#        are created and assigned `michael:www-data` ownership.
-#     3. GitHub Repositories (`/home/michael/raggiesoft-*`):
-#        If `$HOME_DIR/<repo>/.git` already exists, it is SKIPPED here so live
-#        clones are not unnecessarily hard-reset; only newly added/missing
-#        repositories (e.g., `raggiesoft-backstage`) are cloned from GitHub.
-#     4. Nginx Virtual Hosts (`/etc/nginx/sites-available/*.conf`):
-#        If `/etc/nginx/sites-available/<conf>` and `/etc/nginx/sites-enabled/<conf>`
-#        already exist, the vhost is SKIPPED by default so live Nginx configs are
-#        untouched. Pass `--sync-nginx` when you explicitly want modified `.conf`
-#        files from `nginx-config` copied and reloaded (unchanged `.conf` files
-#        are still skipped via byte-for-byte `cmp -s`). Nginx is tested and
-#        reloaded ONLY if at least one vhost was newly added or updated.
-#     5. Incremental Sarah Deployment (`sarah-deploy.sh`):
-#        Invokes `sarah-deploy.sh` WITHOUT `--force-reset` by default so Sarah
-#        hydrates ONLY newly created/empty web roots and repos with new commits
-#        while skipping every unchanged website in milliseconds. Pass
-#        `--force-reset` only if you explicitly want a full nuclear re-sync.
+#   When we launch a brand-new RaggieSoft subdomain (like `backstage.raggiesoft.com`)
+#   or bootstrap a fresh Ubuntu Droplet (`142.93.244.239`), `install-subdomains.sh`
+#   runs on the server as user `michael` and walks a 5-step checklist—skipping
+#   every folder, repo, and Nginx config that already exists while provisioning
+#   ONLY what is missing:
+#     1. Pulls `raggiesoft-deployment-tools` and `nginx-config`.
+#     2. Creates any missing `/var/www/<site>` directories (`michael:www-data`, `755`)
+#        while leaving already-populated live web roots 100% untouched.
+#     3. Clones any missing `/home/michael/raggiesoft-*` GitHub repos.
+#     4. Installs & symlinks any missing `/etc/nginx/sites-available/*.conf` virtual
+#        hosts (or updates modified ones with `--sync-nginx`), testing `nginx -t`
+#        before gracefully reloading Nginx.
+#     5. Calls `sarah-deploy.sh` to hydrate any newly created empty web roots!
 #
 # CLI Flags (100% Non-Interactive — Never Prompts Aside From OS `sudo` Auth):
 #   ./install-subdomains.sh                 # Default: provision ONLY missing sites/vhosts
@@ -41,9 +28,10 @@
 #   ./install-subdomains.sh --force-reset   # Force full re-sync of all repos & web roots
 # ==============================================================================
 
+# Exit immediately if any command returns a non-zero error code
 set -e
 
-# Enforce zero-interactive environment variables for Git/CLI tools
+# Enforce zero-interactive environment variables so `git` and `ssh` never block on prompts
 export CI=true
 export GIT_TERMINAL_PROMPT=0
 export GIT_MERGE_AUTOEDIT=no
@@ -52,12 +40,14 @@ export GIT_PAGER=cat
 export PAGER=cat
 export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
 
+# Guard against running the entire script as `root` (`EUID == 0`); we run as `michael`
+# so cloned Git repos in `/home/michael/` belong to `michael`, using `sudo` only for `/var/www` & `/etc/nginx`!
 if [ "$EUID" -eq 0 ]; then
     echo "🚨 ERROR: Please run this script as 'michael' from ~ (not as root). It will invoke sudo only where needed."
     exit 1
 fi
 
-# Parse optional CLI flags
+# Parse optional CLI flags via `while [[ "$#" -gt 0 ]]` + `shift`
 SYNC_NGINX=false
 FORCE_RESET=false
 
@@ -87,6 +77,12 @@ done
 HOME_DIR="/home/michael"
 cd "$HOME_DIR"
 
+# ==============================================================================
+# STEP 1/5: SYNC INFRASTRUCTURE REPOSITORIES
+# ==============================================================================
+# HOW `git -C <path>` WORKS:
+#   `git -C "/some/folder" fetch` tells Git to run inside `/some/folder` WITHOUT
+#   changing our current shell's working directory (`cd`), keeping loops super clean!
 echo "🚀 [1/5] Checking infrastructure repositories (raggiesoft-deployment-tools & nginx-config)..."
 for infra_repo in "raggiesoft-deployment-tools" "nginx-config"; do
     if [ -d "$HOME_DIR/$infra_repo/.git" ]; then
@@ -105,6 +101,11 @@ for infra_repo in "raggiesoft-deployment-tools" "nginx-config"; do
     fi
 done
 
+# ==============================================================================
+# STEP 2/5: PROVISION `/var/www/*` DOCUMENT ROOTS
+# ==============================================================================
+# Assigns `michael:www-data` ownership (user `michael` writes files via Sarah;
+# group `www-data` lets Nginx read them) ONLY on missing or empty folders!
 echo "📂 [2/5] Checking /var/www subdomain directories (skipping already-populated sites)..."
 WEB_ROOTS=(
     "/var/www/raggiesoft.com"
@@ -137,6 +138,9 @@ for dir in "${WEB_ROOTS[@]}"; do
     fi
 done
 
+# ==============================================================================
+# STEP 3/5: CLONE MISSING GITHUB APPLICATION REPOSITORIES
+# ==============================================================================
 echo "📦 [3/5] Checking GitHub repositories in $HOME_DIR (cloning only missing projects)..."
 REPOS=(
     "raggiesoft-hub"
@@ -167,6 +171,13 @@ for repo in "${REPOS[@]}"; do
     fi
 done
 
+# ==============================================================================
+# STEP 4/5: INSTALL & SYMLINK NGINX VIRTUAL HOSTS
+# ==============================================================================
+# HOW UBUNTU NGINX `sites-available` vs `sites-enabled` WORKS:
+#   - `/etc/nginx/sites-available/*.conf` stores all virtual-host config files.
+#   - `/etc/nginx/sites-enabled/*.conf` holds symbolic links (`ln -sf`) pointing
+#     to the active ones! Nginx only serves sites linked inside `sites-enabled/`.
 echo "🌐 [4/5] Checking Nginx virtual host configurations..."
 VHOSTS=(
     "raggiesoft.com.conf"
@@ -196,7 +207,7 @@ for conf in "${VHOSTS[@]}"; do
 
     if [ -f "$AVAIL_CONF" ] && [ -L "$ENABLED_CONF" ]; then
         if [ "$SYNC_NGINX" = true ] || [ "$FORCE_RESET" = true ]; then
-            # Compare byte-for-byte; only copy if the .conf file actually changed
+            # `cmp -s` compares two files byte-for-byte silently; returns `0` (true) if 100% identical!
             if cmp -s "$SRC_CONF" "$AVAIL_CONF"; then
                 echo "   ✓ Unchanged (skipped): $conf"
             else
@@ -216,6 +227,8 @@ for conf in "${VHOSTS[@]}"; do
     fi
 done
 
+# Validate syntax (`sudo nginx -t`) BEFORE `systemctl reload nginx` (because `set -e` is active,
+# a failed `nginx -t` aborts immediately before `reload` is ever called!).
 if [ "$NGINX_CHANGED" = true ]; then
     sudo nginx -t
     sudo systemctl reload nginx
@@ -224,6 +237,9 @@ else
     echo "   ✓ No Nginx vhost changes required (reload skipped)."
 fi
 
+# ==============================================================================
+# STEP 5/5: HAND OFF TO SARAH FOR INCREMENTAL WEB ROOT HYDRATION
+# ==============================================================================
 echo "👩‍💼 [5/5] Running Sarah Autonomous Deployment..."
 chmod +x "$HOME_DIR/raggiesoft-deployment-tools/sarah-deploy.sh"
 if [ "$FORCE_RESET" = true ]; then

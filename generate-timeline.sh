@@ -1,25 +1,26 @@
 #!/bin/bash
-
 # ============================================================================
 # Architectural Block: generate-timeline.sh
 # ============================================================================
-# This script scans the 'engine-room-records' directory for music project 
-# metadata (`album.json` files) and compiles a markdown narrative timeline.
+# PLAIN-ENGLISH OVERVIEW (100-LEVEL INTRO):
+#   In our shared narrative universe, Engine Room Records bands release albums
+#   set across decades of in-story history (1970s–2020s), even though we produce
+#   them out of chronological order in real life. `generate-timeline.sh` walks
+#   every artist folder, reads each album's in-universe year (`temporalCoverage`)
+#   from `album.json` using `jq`, spots any half-built folders missing an
+#   `album.json`, sorts everything chronologically from oldest year to newest,
+#   and writes a clean Markdown table to `engine-room-timeline.md`.
 #
-# Key Responsibilities:
-# 1. Directory Traversal: Recursively finds `album.json` files within the target artist directory.
-# 2. Metadata Extraction: Uses `jq` to parse JSON and extract 'temporalCoverage' (Year), 'byArtist.name', and 'name'.
-# 3. Missing Data Handling: Assigns placeholder values ("9999", "*Missing Artist*", etc.) when JSON fields are empty or missing.
-# 4. Orphan Directory Detection: Identifies directories that contain audio/track data but lack an `album.json`.
-# 5. Report Generation: Sorts all discovered projects chronologically and outputs a formatted Markdown table.
+# WHEN IT RUNS:
+#   On-demand (`./raggiesoft-deployment-tools/generate-timeline.sh`) whenever you
+#   want an up-to-date chronological checklist of all Engine Room Records releases.
 #
-# Maintenance Notes:
-# - Depends on `jq` being installed and available in the system PATH.
-# - If the structure of `album.json` changes (e.g., if 'temporalCoverage' moves), the `jq` queries must be updated.
-# - The orphan directory check specifically looks for `.wav`, `.mp3`, and `tracks.json` files. If new formats are added (e.g., `.flac`), update the `ls` checks.
+# INPUTS & OUTPUTS:
+#   - Reads: `raggiesoft-servers/raggiesoft-assets/engine-room-records/artists/*/*/album.json`
+#   - Writes: `raggiesoft-deployment-tools/engine-room-timeline.md`
 # ============================================================================
 
-# Define paths relative to the script's location (~/Developer/raggiesoft-deployment-tools)
+# Resolve paths relative to the script's own directory (`dirname "$0"`).
 WORKSPACE_DIR=$(dirname "$0")
 cd "$WORKSPACE_DIR" || exit
 if [ -d "../raggiesoft-servers" ]; then
@@ -32,7 +33,8 @@ OUTPUT_FILE="engine-room-timeline.md"
 
 echo "🔍 Scanning archives for narrative timeline..."
 
-# Initialize the Markdown file with headers and a timestamp
+# `{ ... } > "$OUTPUT_FILE"` groups multiple `echo` commands into one block and
+# writes (`>` truncates/creates) all of them into `$OUTPUT_FILE` in a single file open!
 {
     echo "# 📅 Engine Room Records: Narrative Timeline"
     echo "*Generated on: $(date +"%Y-%m-%d %I:%M %p")*"
@@ -41,46 +43,54 @@ echo "🔍 Scanning archives for narrative timeline..."
     echo "| :--- | :--- | :--- | :--- |"
 } > "$OUTPUT_FILE"
 
-# Find all album.json files and extract metadata into a temporary list for sorting
+# `mktemp` safely creates a unique temporary scratch file in `/tmp` (avoiding filename collisions).
 TEMP_LIST=$(mktemp)
 
+# Walk every `album.json` file under `$SEARCH_PATH` and extract pipe-delimited rows (`YEAR|ARTIST|ALBUM|PATH`):
 find "$SEARCH_PATH" -name "album.json" | while read -r file; do
-    # Extract the first 4 characters of temporalCoverage (assuming YYYY format)
+    # HOW `jq -r '.temporalCoverage // empty'` WORKS:
+    #   - `jq` is a command-line JSON parser; `-r` ("raw output") strips surrounding `"..."` quotes.
+    #   - `// empty` is jq's null-coalescing operator: if `.temporalCoverage` is missing or `null`,
+    #     output nothing instead of the literal word `"null"`.
+    #   - `| cut -c 1-4` slices characters 1 through 4 (turning `"1997-11-18"` into `"1997"`).
     YEAR=$(jq -r '.temporalCoverage // empty' "$file" | cut -c 1-4)
-    # Default to 9999 if the year is missing, ensuring WIPs sort to the bottom
+    # Sentinel Value Trick: if `YEAR` is empty (`-z`), assign `"9999"` so numeric `sort -n`
+    # automatically pushes undated Work-In-Progress (WIP) albums to the very bottom of the table!
     if [ -z "$YEAR" ]; then YEAR="9999"; fi
     
-    # Extract artist name
+    # Extract nested artist name (`.byArtist.name`) with a readable fallback
     ARTIST=$(jq -r '.byArtist.name // empty' "$file")
     if [ -z "$ARTIST" ]; then ARTIST="*Missing Artist*"; fi
     
-    # Extract album name
+    # Extract album title (`.name`)
     ALBUM=$(jq -r '.name // empty' "$file")
     if [ -z "$ALBUM" ]; then ALBUM="*Missing Album Name*"; fi
     
-    # Get the relative path for easy locating in the output markdown
+    # Strip the long `$SEARCH_PATH/` prefix via `sed "s|old|new|"` (using `|` as delimiter
+    # instead of `/` because our paths contain `/` slashes!) so only `<artist>/<album>` remains.
     REL_PATH=$(dirname "$file" | sed "s|$SEARCH_PATH/||")
     
-    # Append the piped string to the temp list for processing later
+    # Append (`>>`) one pipe-delimited record to our scratch file
     echo "$YEAR|$ARTIST|$ALBUM|$REL_PATH" >> "$TEMP_LIST"
 done
 
-# Check for folders that might have been created but lack an album.json entirely
-# (We look for directories that have audio files or tracks.json but NO album.json)
+# Orphan / Uninitialized Album Check:
+# `-mindepth 2 -maxdepth 2 -type d` inspects ONLY `<artist>/<album>` level folders (2 levels deep).
+# If a folder lacks `album.json` (`! -f`) yet already has `tracks.json` or `.wav`/`.mp3` files
+# (`1> /dev/null 2>&1` silences `ls` output and "No such file" warnings), flag it at `9999`!
 find "$SEARCH_PATH" -mindepth 2 -maxdepth 2 -type d | while read -r dir; do
     if [ ! -f "$dir/album.json" ]; then
-        # Check if it has tracks.json or mp3/wav files to ensure it's meant to be an album folder
         if [ -f "$dir/tracks.json" ] || ls "$dir"/*.wav 1> /dev/null 2>&1 || ls "$dir"/*.mp3 1> /dev/null 2>&1; then
             REL_PATH=$(echo "$dir" | sed "s|$SEARCH_PATH/||")
-            # Mark uninitialized folders with 9999 so they drop to the bottom of the timeline
             echo "9999|*Missing album.json*|*Uninitialized*|$REL_PATH" >> "$TEMP_LIST"
         fi
     fi
 done
 
-# Sort numerically by Year, then output the formatted rows to the Markdown file
+# `sort -n` sorts lines numerically by the leading `YEAR` column.
+# `IFS='|' read -r year artist album path` temporarily sets Bash's Internal Field Separator (`IFS`)
+# to `|` so `read` splits each line cleanly into 4 variables even when album titles contain spaces!
 sort -n "$TEMP_LIST" | while IFS='|' read -r year artist album path; do
-    # Format WIP rows differently (indicated by the 9999 sentinel value)
     if [ "$year" == "9999" ]; then
         echo "| ⚠️ **WIP** | $artist | $album | \`$path\` |" >> "$OUTPUT_FILE"
     else
@@ -88,7 +98,7 @@ sort -n "$TEMP_LIST" | while IFS='|' read -r year artist album path; do
     fi
 done
 
-# Cleanup the temporary list file
+# Delete the temporary scratch file so `/tmp` stays tidy
 rm -f "$TEMP_LIST"
 
 echo "✅ Timeline generated successfully: $WORKSPACE_DIR/$OUTPUT_FILE"

@@ -1,17 +1,24 @@
 #!/bin/bash
-
 # ==============================================================================
-# ARCHITECTURAL BLOCK: CHLOÉ MASON - THE ARCHIVIST
+# ARCHITECTURAL BLOCK: CHLOÉ MASON - THE ARCHIVIST (`chloe.sh`)
 # ==============================================================================
-# This script bundles the entire codebase into a single formatted text artifact
-# suitable for ingestion by Large Language Models (LLMs) like Gemini.
-# 
-# Key Responsibilities:
-# 1. Traverses the repository to find relevant source files (.php, .md, .js, etc.).
-# 2. Excludes irrelevant binaries and internal directories (.git, node_modules).
-# 3. Resolves local file paths to their production LIVE URLs where applicable.
-# 4. Extracts deep domain context (Lore & Lyrics) from Markdown and JSON files.
-# 5. Compiles all valid files into a standardized, timestamped archive format.
+# PLAIN-ENGLISH OVERVIEW (100-LEVEL INTRO):
+#   Web LLMs (like Google Gemini in a browser tab) cannot browse hundreds of
+#   local folders on your hard drive unless you upload a context file. Chloé
+#   Mason ("The Archivist") walks the entire `raggiesoft-servers` monorepo,
+#   skips binary/dependency folders (`node_modules/`, `.git/`, `raggiesoft-vaults/`),
+#   enriches every source file (`.php`, `.json`, `.js`, `.css`, `.conf`, `.md`)
+#   with its live production URL, Elara route status, navigation link status,
+#   and song/book lore metadata, and concatenates everything into one neat
+#   timestamped `.txt` manuscript inside `raggiesoft-deployment-tools/chloe/`!
+#
+# WHEN IT RUNS:
+#   On-demand (`./raggiesoft-deployment-tools/chloe.sh`) whenever you want a
+#   single-file snapshot of the codebase + lore to upload to a browser AI chat.
+#
+# INPUTS & OUTPUTS:
+#   - Reads: `raggiesoft-servers/` source code, route manifests, and lyrics/books.
+#   - Writes: `raggiesoft-deployment-tools/chloe/chloe-bundle-YYYY-MM-DD_HH-MM-SS.txt`
 # ==============================================================================
 
 # --- CHLOÉ MASON: THE ARCHIVIST (v1.7.0 - Lore & Lyrics Edition) ---
@@ -25,7 +32,7 @@ echo ""
 # ------------------------------------------------------------------------------
 # 1. ESTABLISH PATHS
 # ------------------------------------------------------------------------------
-# Calculate absolute paths for workspace and the root developer directory
+# Resolve absolute paths relative to `chloe.sh` (`$0`)
 WORKSPACE_DIR=$(cd "$(dirname "$0")" && pwd)
 PARENT_ROOT=$(cd "$WORKSPACE_DIR/.." && pwd)
 if [ -d "$PARENT_ROOT/raggiesoft-servers" ]; then
@@ -34,15 +41,14 @@ else
     ROOT_DEV_DIR="$PARENT_ROOT"
 fi
 
-# Give Chloé her own private reading room for the manuscripts
-# Ensure output directory exists before generating bundle
+# Create Chloé's output folder (`raggiesoft-deployment-tools/chloe/`) if missing
 CHLOE_DIR="$WORKSPACE_DIR/chloe"
 if [ ! -d "$CHLOE_DIR" ]; then
     mkdir -p "$CHLOE_DIR"
     echo "   📁 Setting up my private archives at: /chloe"
 fi
 
-# Define temporal variables for filename uniqueness
+# Stamp filename with `YYYY-MM-DD_HH-MM-SS` so consecutive runs never overwrite prior snapshots
 DATE_STAMP=$(date +"%Y-%m-%d")
 TIME_STAMP=$(date +"%H-%M-%S")
 SCRIPT_NAME="chloe-bundle"
@@ -53,12 +59,11 @@ echo "   Je commence... Scanning for code artifacts now."
 echo "------------------------------------------------------------------"
 
 # ------------------------------------------------------------------------------
-# 2. CLEAR THE DESK & WRITE METADATA
+# 2. CLEAR THE DESK & WRITE METADATA HEADER
 # ------------------------------------------------------------------------------
-# Initialize an empty output file, overwriting if it exists
+# Truncate/create empty output file (`>`), then append (`>>`) the architectural briefing header
 > "$OUTPUT_FILE"
 
-# Append global context header for LLM ingestion
 {
     echo "=================================================================="
     echo "  CHLOÉ MASON'S ARCHIVE BUNDLE"
@@ -77,31 +82,37 @@ echo "------------------------------------------------------------------"
 } >> "$OUTPUT_FILE"
 
 # ------------------------------------------------------------------------------
-# 3. EXECUTE THE SMART SEARCH
+# 3. EXECUTE THE SMART SEARCH (`find ... -prune`)
 # ------------------------------------------------------------------------------
 cd "$ROOT_DEV_DIR" || exit
 
-# Added *.md to the fetch list
-# Uses `find` with pruning to exclude large/binary dirs, fetching only allowed extensions
+# HOW `find . -type d \( ... \) -prune -o -type f \( ... \) -print` WORKS:
+#   - Without `-prune`, `find` wastes seconds walking inside 100,000+ files in `node_modules/` and `.git/`!
+#   - `-type d \( -name ".git" -o -name "node_modules" ... \) -prune` tells `find`:
+#     "Whenever you hit one of these directory names, STOP descending into it immediately!"
+#   - `-o -type f \( -name "*.php" ... \) -print` ("OR if it's a matching text file, print its path")
+#     streams only clean source/lore files into `while read -r file`.
 find . -type d \( -name ".git" -o -name "node_modules" -o -name "vendor" -o -name "chloe" -o -name "raggiesoft-vaults" -o -name "wav" -o -name "mp3" -o -name "ogg" -o -name "archives" -o -name "obj" -o -name "bin" -o -name "_sysops" \) -prune \
     -o -type f \( -name "*.php" -o -name "*.json" -o -name "*.js" -o -name "*.css" -o -name "*.conf" -o -name "*.md" \) -print | while read -r file; do
     
-    # Extract file path components for analysis
+    # BASH STRING SLICING OPERATORS (`#`, `##`, `%`):
+    #   - `${file#./}`      : `#` strips the shortest matching prefix `./` from the front of `$file`.
+    #   - `${BASE_NAME##*.}`: `##` strips the *longest* prefix up to the last `.` (extracting file extension `php`, `md`, etc.!).
     REL_PATH="${file#./}"
     DIR_NAME=$(dirname "$REL_PATH")
     BASE_NAME=$(basename "$REL_PATH")
     EXT="${BASE_NAME##*.}"
     
-    # Initialize metadata variables per file
+    # Reset per-file diagnostic tags at the start of every iteration
     LIVE_URL="[INTERNAL/UNMAPPED]"
     ROUTE_STATUS=""
     NAV_STATUS=""
     LYRICS_META=""
     BOOK_META=""
     
-    # --- CHLOÉ's URL RESOLUTION, WIP & ORPHAN LOGIC ---
+    # --- CHLOÉ'S URL RESOLUTION, WIP & ORPHAN LOGIC ---
     if [[ "$REL_PATH" == *"raggiesoft-assets/"* ]]; then
-        # Rule 1: Static Assets CDN (Maps directly to assets.raggiesoft.com)
+        # Rule 1: Anything inside `raggiesoft-assets/` maps 1:1 to `https://assets.raggiesoft.com/...`
         CLEAN_PATH="${REL_PATH#*raggiesoft-assets/}"
         LIVE_URL="https://assets.raggiesoft.com/${CLEAN_PATH}"
         
@@ -115,13 +126,11 @@ find . -type d \( -name ".git" -o -name "node_modules" -o -name "vendor" -o -nam
         fi
         
         if [[ "$CLEAN_PATH" == "pages/"* ]]; then
-            # Rule 2: Pages Routing
-            # Translate local 'pages/' directory to route path
+            # Rule 2: Hub View Pages (`pages/foo/bar.php` -> `foo/bar` via `#pages/` prefix strip and `%.php` suffix strip)
             PAGE_PATH="${CLEAN_PATH#pages/}" 
             PAGE_PATH="${PAGE_PATH%.php}" 
             
-            # Route Manifest Check
-            # Look up route definition in data/routes directory
+            # Route Manifest Check: `grep -rl` searches recursively (`-r`) and prints ONLY matching filenames (`-l`)
             ROUTES_DIR="$HUB_REL_DIR/data/routes"
             if [ -d "$ROUTES_DIR" ]; then
                 MATCHING_JSON=$(grep -rl "$PAGE_PATH" "$ROUTES_DIR" 2>/dev/null | head -n 1)
@@ -132,13 +141,11 @@ find . -type d \( -name ".git" -o -name "node_modules" -o -name "vendor" -o -nam
                 fi
             fi
             
-            # Reconstruct the expected local URL path structure
             PAGE_DIR=$(dirname "$PAGE_PATH")
             PAGE_BASE=$(basename "$PAGE_PATH")
             LOCAL_URL_PATH=""
             
-            # Rule 3: Overview/Home Index Masking
-            # Standardize index pages (overview/home) to root domains
+            # Rule 3: Overview/Home Index Masking (`pages/home.php` -> `/`, `pages/foo/overview.php` -> `/foo/`)
             if [ "$PAGE_BASE" == "overview" ] || [ "$PAGE_BASE" == "home" ]; then
                 if [ "$PAGE_DIR" == "." ]; then
                     LIVE_URL="https://raggiesoft.com/"
@@ -157,8 +164,7 @@ find . -type d \( -name ".git" -o -name "node_modules" -o -name "vendor" -o -nam
                 fi
             fi
             
-            # ORPHAN PAGE DETECTION
-            # Search component views to determine if the page is actually reachable
+            # ORPHAN PAGE DETECTION: Check if any header or sidebar menu actually links to `$LOCAL_URL_PATH`
             COMPONENTS_DIR="$HUB_REL_DIR/includes/components"
             if [ -d "$COMPONENTS_DIR" ]; then
                 if [ "$LOCAL_URL_PATH" == "/" ]; then
@@ -175,29 +181,24 @@ find . -type d \( -name ".git" -o -name "node_modules" -o -name "vendor" -o -nam
             fi
             
         else
-            # Non-page hub files are internal only
+            # Non-page hub files (`includes/`, `amanda/`) are blocked from direct HTTP access by Nginx
             LIVE_URL="[INTERNAL - Protected by Nginx / Elara Gateway]"
         fi
     fi
-    # ------------------------------------
 
-    # --- NEW: LORE & LYRICS METADATA EXTRACTION ---
-    # Process rich text documentation and domain content
+    # --- LORE & LYRICS METADATA EXTRACTION FOR `.md` FILES ---
     if [ "$EXT" == "md" ]; then
         if [[ "$REL_PATH" == *"engine-room-records/artists/"*"/lyrics/"* ]]; then
-            # Extract Artist/Album directories to locate JSONs
-            # Uses sed to capture path segments
+            # Capture artist and album parent paths via `sed -n 's|pattern|\1|p'` capture groups
             ARTIST_DIR=$(echo "$REL_PATH" | sed -n 's|\(.*engine-room-records/artists/[^/]*\).*|\1|p')
             ALBUM_DIR=$(echo "$REL_PATH" | sed -n 's|\(.*engine-room-records/artists/[^/]*/[^/]*\).*|\1|p')
             
-            # Look for album.json and tracks.json (fallback to artist root if not in album dir)
             ALBUM_JSON="$ALBUM_DIR/album.json"
             [ ! -f "$ALBUM_JSON" ] && ALBUM_JSON="$ARTIST_DIR/album.json"
             
             TRACKS_JSON="$ALBUM_DIR/tracks.json"
             [ ! -f "$TRACKS_JSON" ] && TRACKS_JSON="$ARTIST_DIR/tracks.json"
 
-            # Parse album.json for lore (Artist, Album, Release Year)
             if [ -f "$ALBUM_JSON" ]; then
                 ARTIST_NAME=$(grep -i '"artist"' "$ALBUM_JSON" | cut -d'"' -f4 | head -n 1)
                 ALBUM_NAME=$(grep -i '"album"' "$ALBUM_JSON" | cut -d'"' -f4 | head -n 1)
@@ -206,7 +207,6 @@ find . -type d \( -name ".git" -o -name "node_modules" -o -name "vendor" -o -nam
                 LYRICS_META="// ALBUM INFO: $ARTIST_NAME - $ALBUM_NAME ($RELEASE_YEAR)"
             fi
 
-            # Parse tracks.json for order using the filename slug
             if [ -f "$TRACKS_JSON" ]; then
                 SONG_SLUG="${BASE_NAME%.*}"
                 TRACK_NUM=$(grep -n "$SONG_SLUG" "$TRACKS_JSON" | cut -d: -f1)
@@ -216,13 +216,11 @@ find . -type d \( -name ".git" -o -name "node_modules" -o -name "vendor" -o -nam
             fi
             
         elif [[ "$REL_PATH" == *"raggiesoft-books/"* ]] || [[ "$REL_PATH" == *"books/"* ]]; then
-            # Inject editorial metadata
             BOOK_META="// CONTEXT:    Managed by Paige (The Literary Editor)"
         fi
     fi
-    # ----------------------------------------------
 
-    # Chloé's standard categorization based on file type for terminal feedback
+    # Print color/emoji progress line to terminal based on file extension and route status
     if [ "$EXT" == "php" ]; then
         if [[ "$NAV_STATUS" == *"[ORPHANED"* ]]; then
             echo "      👻 Orphaned Route:         $REL_PATH"
@@ -251,8 +249,8 @@ find . -type d \( -name ".git" -o -name "node_modules" -o -name "vendor" -o -nam
         echo "      📑 Cataloging artifact:    $REL_PATH"
     fi
     
-    # Write to the manuscript
-    # Appends file boundaries, dynamic metadata, and file contents to the bundle
+    # Append file boundary header + metadata comments + full `cat "$file"` body into `$OUTPUT_FILE`
+    # (`echo -e` enables `\n` newline interpretation inside `$LYRICS_META`).
     {
         echo "--- START OF FILE $REL_PATH ---"
         echo "// DIRECTORY: $DIR_NAME"

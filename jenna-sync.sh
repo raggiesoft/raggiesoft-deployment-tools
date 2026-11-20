@@ -1,28 +1,40 @@
 #!/bin/bash
 
 # ============================================================================
-# Architectural Block: jenna-sync.sh
+# JENNA: THE DEVELOPMENT & SYNCHRONIZATION LIAISON (`jenna-sync.sh`)
 # ============================================================================
-# This script ("Jenna") is the central Deployment & Synchronization Liaison for the 
-# entire Raggiesoft platform. It handles pulling, auditing, building, and pushing 
-# code across multiple Git repositories and syncing heavy assets to DigitalOcean Spaces.
+# PLAIN-ENGLISH OVERVIEW (100-Level Course Guide):
+#   Think of `jenna-sync.sh` ("Jenna") as the single "Publish Everything Safely"
+#   button on your local workstation (`$HOME/Developer`). You NEVER run raw
+#   `git push` directly inside `raggiesoft-servers/` or `raggiesoft-deployment-tools/`—
+#   instead, you run Jenna (`./jenna-sync.sh --push -m "Commit Message"`), and she
+#   orchestrates the entire RaggieSoft multi-repo & CDN release pipeline in order:
 #
-# Key Responsibilities:
-# 1. Multi-Repo Orchestration: Clones, pulls, and pushes updates to 'raggiesoft-hub', 
-#    'stardust-engine-cms', 'raggiesoft-narratives', 'raggiesoft-nebulae', etc.
-# 2. Asset Synchronization: Uses `rclone` to push/pull binaries to a remote CDN (do-spaces).
-# 3. Build & Minification: Executes local PHP scripts to minify CSS/JS and compile static assets.
-# 4. QA & Auditing: Runs PHP-based tests (Integrity Check, Orphan Audit) before allowing a push.
-# 5. Automatic Pre-Flight Connectivity Probes: Automatically tests GitHub (SSH Port 22,
-#    automatic fallback to SSH over Port 443, and HTTPS Port 443) and DigitalOcean Spaces CDN
-#    within 5 seconds, reporting back whether each connection works or cleanly falling back
-#    to local-only builds/commits if offline or blocked.
+#   WHEN IT RUNS:
+#     - `--pull`: Pulls the latest Git commits across all 15+ local repositories and
+#       downloads any updated binary assets from DigitalOcean Spaces CDN (`rclone sync`).
+#     - `--audit`: Runs read-only QA checks (broken asset references, orphan files,
+#       network SEO/OpenGraph validation) without committing or pushing anything.
+#     - `--push -m "Message" [-t "v1.0.0"] [--force]`: Runs the full pre-flight,
+#       QA, build/compile (`paige.php`, `audrey.php`, CSS/JS minifiers, Next.js 16,
+#       SvelteKit 2, Astro 6, Nuxt 4, Bootstrap 5, TypeScript, Web Awesome, Angular 19),
+#       multi-repo Git commit + push, DigitalOcean Spaces CDN upload, and IndexNow ping!
 #
-# Maintenance Notes:
-# - Do NOT execute this script locally unless you are preparing a full production sync.
-# - Rclone dependencies: Requires a valid `rclone.conf` inside `build-tools/rclone/`.
-# - PHP dependencies: Heavily relies on local CLI PHP to run the embedded QA scripts and build tools.
-# - DO NOT force push (`--force`) unless recovering from a catastrophic git desync.
+#   WHAT INPUTS / REPOS IT READS & UPDATES:
+#     - `raggiesoft-narratives` (Markdown novels & lore)
+#     - `stardust-engine-cms` (Shared PHP 8.5 CMS core)
+#     - `raggiesoft.com/www` + all 9 `raggiesoft.com/subdomains/*` apps
+#     - `michaelpragsdale.com/www` (Angular 19 Zoneless engineering portfolio)
+#     - `raggiesoft-deployment-tools` & `nginx-config`
+#     - `raggiesoft-assets` -> mirrored via `rclone` to DigitalOcean Spaces (`assets.raggiesoft.com`)
+#
+#   KEY BASH / DEVOPS CONCEPTS EXPLAINED IN THIS FILE:
+#     1. Self-Wrapping Process Replacement (`exec caffeinate -im "$0" --caffeinated "$@"`)
+#     2. Zero-Interactive Environment Variables (`export CI=true`, `GIT_TERMINAL_PROMPT=0`)
+#     3. OS-Level Hard Timeouts (`fork` + `setpgrp` + `SIGALRM` via `/usr/bin/perl`)
+#     4. Automatic Network Fallback (SSH Port 22 -> SSH over HTTPS Port 443 -> Local-Only)
+#     5. Binary Shadowing (`function git()` intercepting `git` via `command git "$@"`)
+#     6. Structured POSIX Exit Codes (`ERRORLEVEL` 0, 1, 2, 3, 4)
 # ============================================================================
 
 # --- JENNA: THE DEVELOPMENT LIAISON (v7.3 - Force Push Edition) ---
@@ -30,8 +42,18 @@
 #        ./jenna-sync.sh --pull
 #        ./jenna-sync.sh --audit
 
-# --- OS-SPECIFIC OVERRIDES ---
-# If running on macOS (darwin) and `caffeinate` is available, ensure the system doesn't sleep during long syncs.
+# --- OS-SPECIFIC OVERRIDES (`caffeinate` Sleep Prevention on macOS) ---
+# HOW `exec` + `shift` SELF-WRAPPING WORKS IN BASH:
+#   - `$OSTYPE` is built into Bash (`darwin*` = macOS, `linux-gnu*` = Linux, `msys` = Windows Git Bash).
+#   - `command -v caffeinate > /dev/null` checks if Apple's `caffeinate` utility exists.
+#   - When you run `./jenna-sync.sh --push -m "Msg"`, `$1` (the first argument) is `--push`,
+#     NOT `--caffeinated`. So `exec caffeinate -im "$0" --caffeinated "$@"` REPLACES the current
+#     Bash process (`exec` = no extra subshell PID!) with `caffeinate -im` (prevent idle & disk sleep),
+#     which immediately re-launches this exact script (`"$0"`) with `--caffeinated` prepended in front
+#     of all your original quoted arguments (`"$@"`).
+#   - On that second entry, `$1` IS `--caffeinated`, so `shift` pops `$1` off the argument list
+#     (sliding `$2` into `$1`, `$3` into `$2`, etc.) and the rest of the script runs normally while
+#     macOS stays wide awake until Jenna exits!
 if [[ "$OSTYPE" == "darwin"* ]] && command -v caffeinate > /dev/null; then
     # If we are not already wrapped, re-execute the script inside caffeinate
     if [ "$1" != "--caffeinated" ]; then
@@ -47,6 +69,11 @@ fi
 # ============================================================================
 # 0. ZERO-INTERACTIVE / AUTOMATIC "YES" ENVIRONMENT ENFORCEMENT
 # ============================================================================
+# HOW `export VAR=value` WORKS IN BASH:
+#   A plain variable (`FOO=bar`) only exists inside this Bash script. Prefixing it
+#   with `export` places it into the OS process environment block so EVERY child
+#   program Jenna launches (`git`, `ssh`, `npm`, `npx`, `php`, `node`) inherits it!
+#
 # Guarantees that Jenna NEVER blocks or hangs waiting for keyboard input:
 # 1. Node / npm / npx / Next.js / Angular / Astro / Nuxt / Vite:
 #    - `npm_config_yes=true`: Automatically answers "Yes" to any npm/npx install or upgrade prompt.
@@ -59,8 +86,9 @@ fi
 #      Suppresses framework telemetry & update-notifier prompts across all subdomains.
 # 2. Git & SSH:
 #    - `GIT_TERMINAL_PROMPT=0`: Never blocks on an interactive HTTPS username/password prompt.
-#    - `GIT_MERGE_AUTOEDIT=no` & `GIT_EDITOR=true`: Never opens vim/nano during `git pull` merges.
-#    - `GIT_PAGER=cat` & `PAGER=cat`: Never pauses output in `less`.
+#    - `GIT_MERGE_AUTOEDIT=no` & `GIT_EDITOR=true`: Never opens vim/nano during `git pull` merges
+#      (`/usr/bin/true` is a tiny Unix program that immediately exits 0 without opening an editor!).
+#    - `GIT_PAGER=cat` & `PAGER=cat`: Streams output straight to stdout instead of pausing in `less`.
 #    - `GIT_SSH_COMMAND`: Enforces `BatchMode=yes` and `StrictHostKeyChecking=accept-new`
 #      so SSH never pauses to ask `(yes/no/[fingerprint])` on rotated GitHub host keys.
 # 3. Homebrew / GitHub CLI:
@@ -89,9 +117,18 @@ export HOMEBREW_NO_INSTALL_CLEANUP=1
 export GH_PROMPT_DISABLED=1
 
 
-# 1. ESTABLISH PATHS (Dynamically resolved across OS from ~/Developer/raggiesoft-deployment-tools)
+# ============================================================================
+# 1. ESTABLISH PATHS (Dynamically resolved across macOS, Linux, and Windows Git Bash)
+# ============================================================================
+# HOW `$(cd "$(dirname "$0")" && pwd)` FINDS THIS SCRIPT'S TRUE DIRECTORY:
+#   - `$0` is the path used to invoke the script (e.g., `./raggiesoft-deployment-tools/jenna-sync.sh`).
+#   - `dirname "$0"` strips the filename (`./raggiesoft-deployment-tools`).
+#   - Running `cd ... && pwd` inside `$(...)` (a subshell command substitution) resolves
+#     relative `.` or `..` segments into an absolute path (`/Users/michael/Developer/raggiesoft-deployment-tools`)
+#     without changing the parent script's current working directory!
 WORKSPACE_DIR=$(cd "$(dirname "$0")" && pwd)
 PARENT_ROOT=$(cd "$WORKSPACE_DIR/.." && pwd)
+# `[ -d ... ]` tests whether a directory exists on disk (supporting both monorepo and flat layouts):
 if [ -d "$PARENT_ROOT/raggiesoft-servers" ]; then
     SERVER_ROOT="$PARENT_ROOT/raggiesoft-servers"
 else
@@ -99,6 +136,7 @@ else
 fi
 ASSETS_ROOT="$SERVER_ROOT/raggiesoft-assets"
 
+# Map every web property, subdomain, CMS, narratives repo, and config directory:
 HUB_ROOT="$SERVER_ROOT/raggiesoft.com/www"
 CMS_ROOT="$SERVER_ROOT/stardust-engine-cms"
 if [ -d "$SERVER_ROOT/raggiesoft-novels" ]; then
@@ -120,7 +158,14 @@ DEPLOYMENT_TOOLS_ROOT="$WORKSPACE_DIR"
 NGINX_CONFIG_ROOT="$SERVER_ROOT/nginx-config"
 LOGS_DIR="$WORKSPACE_DIR/logs"
 
-# 2. DETECT RCLONE
+# ============================================================================
+# 2. DETECT RCLONE (Cloud Storage Sync Engine for DigitalOcean Spaces S3 CDN)
+# ============================================================================
+# `rclone` is the command-line "rsync for cloud storage" that syncs `raggiesoft-assets/`
+# to our DigitalOcean Spaces bucket (`do-spaces:assets.raggiesoft.com`).
+# - On Windows Git Bash (`$OSTYPE` is `msys` or `cygwin`), look for bundled `rclone.exe`.
+# - On macOS / Linux, check `PATH` first (`command -v rclone &> /dev/null` silences both
+#   stdout and stderr), then fall back to `build-tools/rclone/rclone`.
 RCLONE_BIN=""
 RCLONE_CONF="$WORKSPACE_DIR/build-tools/rclone/rclone.conf"
 
@@ -142,6 +187,7 @@ else
     fi
 fi
 
+# `[ ! -f "$RCLONE_CONF" ]` (`!` = NOT, `-f` = regular file exists) aborts early if credentials are missing:
 if [ ! -f "$RCLONE_CONF" ]; then
     echo "👱‍♀️ JENNA: Uh oh, I'm missing my credentials (rclone.conf)!"
     exit 1
@@ -149,6 +195,12 @@ fi
 
 # 3. JENNA'S BRAIN (Functions & ERRORLEVEL Exit Code Contract)
 # ============================================================================
+# HOW POSIX EXIT CODES (`0`–`255`) WORK:
+#   Every CLI program returns an integer exit status (`$?` in Bash, `%ERRORLEVEL%` on Windows)
+#   when it finishes: `0` universally means "100% success", while non-zero integers encode
+#   specific failure modes so calling scripts (`studio.sh`, CI runners) know what happened.
+#   `readonly` locks these constants so nothing later in the script can accidentally overwrite them!
+#
 # MS-DOS / POSIX Exit Code Table (ERRORLEVEL):
 #   0 = ERR_SUCCESS                    (100% complete: Builds + GitHub + CDN all succeeded)
 #   1 = ERR_FATAL_BUILD_OR_QA          (Missing args/binaries, QA fail, duplicate tag, or build error)
@@ -168,6 +220,7 @@ CAN_SYNC_CDN=true
 GITHUB_SYNC_HAD_ERROR=false
 CDN_SYNC_HAD_ERROR=false
 
+# Evaluates the cumulative network flags at the very end of `--pull` or `--push` and exits with the exact code:
 function finalize_jenna_exit() {
     if [ "$GITHUB_SYNC_HAD_ERROR" = true ] && [ "$CDN_SYNC_HAD_ERROR" = true ]; then
         echo "⚠️  JENNA EXIT STATUS: ERRORLEVEL=$ERR_NETWORK_OFFLINE_LOCAL_ONLY (ERR_NETWORK_OFFLINE_LOCAL_ONLY — Built & committed locally; both GitHub & CDN unreachable/failed)."
@@ -187,10 +240,16 @@ function finalize_jenna_exit() {
 # ============================================================================
 # Helper: run_with_timeout <seconds> <command...>
 # ============================================================================
-# Executes a command in its own process group with a strict OS-level SIGKILL (-9)
-# timer enforced by /usr/bin/perl. Unlike user-space flags (--timeout), this
-# guarantees that blackholed DNS or TLS handshakes on restrictive public WiFi
-# networks terminate at the exact <seconds> mark even for Go binaries (rclone).
+# WHY MACOS NEEDS THIS PERL WATCHDOG (`timeout` isn't installed by default on macOS!):
+#   Linux ships GNU `timeout`, and macOS does not. Furthermore, user-space `--timeout` flags
+#   can still hang inside OS kernel DNS resolution or blackholed hotel/cafe WiFi firewalls.
+#   Here, `/usr/bin/perl` (installed on every Mac & Linux system) acts as a tiny OS watchdog:
+#     - `fork()` spawns a child process (`$pid == 0`), puts it in a dedicated process group
+#       (`setpgrp(0, 0)`), and `exec @ARGV` runs the target command.
+#     - In the parent process, `alarm $t` sets a kernel hardware timer for `$secs` seconds.
+#     - If the timer fires (`$SIG{ALRM}`) before `waitpid` finishes, `kill -9, $pid` sends
+#       an unblockable `SIGKILL` and exits with code `124` (the POSIX convention for timeout).
+#     - Otherwise `alarm 0` cancels the timer and `$? >> 8` extracts the child's real exit code!
 function run_with_timeout() {
     local secs="$1"
     shift
@@ -210,14 +269,16 @@ function run_with_timeout() {
 # Helper: run_github_preflight (5-Second Automatic GitHub Probe)
 # ============================================================================
 # Automatically probes GitHub reachability within 5 seconds:
-# 1. Tests standard SSH on Port 22 and reports back if reachable.
-# 2. If Port 22 is blocked/timed out, automatically falls back to SSH over Port 443
-#    (ssh.github.com:443) and tests within 5 seconds.
-# 3. Also tests HTTPS git reachability within 5 seconds.
-# 4. If unreachable, reports back and sets CAN_PUSH_GITHUB=false so Jenna still builds
-#    and commits locally while cleanly skipping network git push/pull/fetch commands.
+# 1. Tests standard SSH on Port 22 (`ssh -T git@github.com`, where `2>&1` merges stderr into
+#    stdout because GitHub prints `"Hi <user>! You've successfully authenticated"` on stderr!).
+# 2. If Port 22 is blocked by a campus/cafe firewall, automatically falls back to GitHub's
+#    official SSH-over-HTTPS endpoint (`ssh.github.com` on Port `443`) and updates `GIT_SSH_COMMAND`!
+# 3. Also tests HTTPS git reachability (`command git ls-remote`) within 5 seconds.
+# 4. If completely offline, sets `CAN_PUSH_GITHUB=false` so Jenna still builds and commits
+#    locally while cleanly skipping network `git push/pull/fetch` commands.
 function run_github_preflight() {
     echo "👱‍♀️ JENNA: Running 5-second GitHub pre-flight check..."
+    # Abort stalled HTTP transfers if throughput drops below 1,000 bytes/sec for 5 seconds:
     export GIT_HTTP_LOW_SPEED_LIMIT=1000
     export GIT_HTTP_LOW_SPEED_TIME=5
 
@@ -229,6 +290,7 @@ function run_github_preflight() {
         echo "      ✓ GitHub SSH (Port 22) reachable."
     fi
 
+    # Automatic Port 443 SSH fallback when Port 22 is firewalled:
     if [ "$ssh_ok" = false ]; then
         local out443
         out443=$(run_with_timeout 5 ssh -T -p 443 -o HostName=ssh.github.com -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=accept-new git@github.com 2>&1)
@@ -239,6 +301,7 @@ function run_github_preflight() {
         fi
     fi
 
+    # Also verify HTTPS Port 443 reachability for any HTTPS-cloned remotes:
     local https_ok=false
     if run_with_timeout 5 command git ls-remote --heads https://github.com/raggiesoft/raggiesoft-narratives.git main >/dev/null 2>&1; then
         https_ok=true
@@ -258,10 +321,11 @@ function run_github_preflight() {
 # ============================================================================
 # Helper: run_cdn_preflight (5-Second Automatic DigitalOcean Spaces Probe)
 # ============================================================================
-# Tests whether DigitalOcean Spaces (nyc3.digitaloceanspaces.com) can complete
-# a single top-level bucket listing within 5 seconds. If the current WiFi
-# firewall blackholes S3/Spaces traffic, kills the probe at 5.0s and sets
-# CAN_SYNC_CDN=false so rclone never hangs indefinitely.
+# Tests whether DigitalOcean Spaces (`nyc3.digitaloceanspaces.com`) can complete
+# a single top-level bucket listing (`lsf --max-depth 1`) within 5 seconds.
+# Note `--bind 0.0.0.0` (forces IPv4 when broken WiFi IPv6 routes blackhole S3)
+# and `--disable-http2` (avoids middlebox HTTP/2 framing stalls). If unreachable,
+# kills the probe at 5.0s and sets `CAN_SYNC_CDN=false` so `rclone` never hangs!
 function run_cdn_preflight() {
     echo "👱‍♀️ JENNA: Running 5-second DigitalOcean Spaces CDN pre-flight check..."
     if run_with_timeout 5 "$RCLONE_BIN" lsf do-spaces:assets.raggiesoft.com \
@@ -285,12 +349,16 @@ function run_cdn_preflight() {
 }
 
 # ============================================================================
-# Wrapper: git (Guards network git subcommands with pre-flight & timeout)
+# Wrapper: git (Intercepts `git` Calls Using Bash's `command` Builtin!)
 # ============================================================================
-# Local git operations (add, commit, status, diff-index, tag, log, rev-parse)
-# execute directly via `command git`. Remote network operations (push, pull,
-# fetch, clone, ls-remote) check CAN_PUSH_GITHUB first so offline/restricted
-# WiFi runs never hang, and record any push/pull/clone failures for ERRORLEVEL.
+# HOW SHADOWING A BINARY WITH `function git()` + `command git` WORKS:
+#   In Bash, if you define `function git()`, every `git ...` line below calls THIS
+#   function first! Inside the function, writing `command git "$@"` tells Bash:
+#   "Bypass shell functions and execute the real `/usr/bin/git` binary on `PATH`"
+#   (preventing infinite recursion!).
+#   - Local subcommands (`add`, `commit`, `diff-index`, `tag`, `rev-parse`) run directly.
+#   - Network subcommands (`push`, `pull`, `clone`, `fetch`, `ls-remote`) check
+#     `$CAN_PUSH_GITHUB` first so offline runs skip network calls instantly!
 function git() {
     case "$1" in
         push|pull|clone)
@@ -322,10 +390,13 @@ function git() {
 # ============================================================================
 # Helper: run_non_interactive_npm <subcommand...>
 # ============================================================================
-# Feeds an automatic stream of "y" (Yes) to stdin while preserving the exact
-# exit code of `npm` via `PIPESTATUS[1]`. If Next.js, Angular, Nuxt, Astro, or
-# npm prompts for an upgrade or dependency installation (e.g., `[Y/n]`), it is
-# automatically approved without blocking the deployment pipeline.
+# HOW `yes | npm --yes "$@"` + `${PIPESTATUS[1]}` WORKS:
+#   - Unix `yes` prints an endless stream of `"y\n"` lines into `npm`'s stdin so any
+#     unexpected `[Y/n]` prompt is answered immediately.
+#   - Normally `$?` after `yes | npm` returns the exit status of the right-hand command,
+#     while Bash's special `PIPESTATUS` array stores the exit code of EVERY stage in the
+#     pipe (`PIPESTATUS[0]` = `yes`, `PIPESTATUS[1]` = `npm`)—returning `"${PIPESTATUS[1]}"`
+#     guarantees that if `npm run build` fails, Jenna catches the exact build failure!
 function run_non_interactive_npm() {
     export PATH="/opt/homebrew/bin:$PATH"
     yes 2>/dev/null | npm --yes "$@"
@@ -335,10 +406,8 @@ function run_non_interactive_npm() {
 # ============================================================================
 # Helper: auto_upgrade_nextjs_if_requested
 # ============================================================================
-# Checks Next.js 16.4+'s built-in `prepareUpgrade` module before building.
-# If Next.js flags a recommended security/version upgrade (`status === "ready"`),
-# automatically approves ("Yes") and installs the target `next` and
-# `eslint-config-next` versions non-interactively so `next build` never prompts.
+# Proactively inspects Next.js 16.4+'s `prepareUpgrade` helper before `next build`;
+# if a security patch release is flagged, installs it automatically with `--save-exact`.
 function auto_upgrade_nextjs_if_requested() {
     export PATH="/opt/homebrew/bin:$PATH"
     if [ "$CAN_PUSH_GITHUB" = true ] && [ -f "./node_modules/next/dist/lib/upgrade/prepare-upgrade.js" ]; then
@@ -369,6 +438,15 @@ function show_help() {
     echo "Note: Jenna automatically tests GitHub & CDN connectivity (5s pre-flight probe) and reports back."
 }
 
+# ============================================================================
+# QA Gate 1: run_integrity_check (Pre-Push WCAG & 404 Route Validator)
+# ============================================================================
+# Runs an inline PHP CLI script (`php -r "..."`) inside a subshell `( ... )`
+# (parentheses isolate `cd "$WORKSPACE_DIR"` so the outer shell's directory never moves!).
+# Scans every JSON route manifest in `raggiesoft.com/www/data/routes/*.json`:
+#   1. Fails with `WCAG FAIL` if a route sets `navbarBrandLogo` without `navbarBrandAlt`!
+#   2. Fails with `404 FAIL` if a route's `"view"` points to a missing `.php` file!
+# If `$? -ne 0` (exit code `1`), Jenna aborts the push immediately before shipping broken code.
 function run_integrity_check() {
     echo "👱‍♀️ JENNA: QA Protocol Initiated..."
     (
@@ -413,6 +491,14 @@ function run_integrity_check() {
     fi
 }
 
+# ============================================================================
+# QA Gate 2: run_orphan_audit (Detects Unrouted Pages & Exposed Drafts)
+# ============================================================================
+# Cross-references every `.php` view file in `raggiesoft.com/www/pages/` against
+# `data/routes/*.json` and writes a timestamped report to `logs/` if it finds:
+#   - `EXPOSED`: Marked `JENNA: DRAFT` inside the file, yet accidentally linked in routes!
+#   - `DRAFTS` : Marked `JENNA: DRAFT` and safely unlinked.
+#   - `ORPHANS`: Finished `.php` page sitting on disk with no route pointing to it.
 function run_orphan_audit() {
     echo "👱‍♀️ JENNA: Starting Orphaned Page Audit..."
     if [ ! -d "$LOGS_DIR" ]; then mkdir -p "$LOGS_DIR"; fi
@@ -527,9 +613,19 @@ function run_orphan_audit() {
     )
 }
 
-# Official RaggieSoft IndexNow API Key (hosted at /<INDEXNOW_KEY>.txt on every domain)
+# Official RaggieSoft IndexNow API Key (hosted at `/<INDEXNOW_KEY>.txt` on every domain)
 readonly INDEXNOW_KEY="726167676965736f6674696e6465786e"
 
+# ============================================================================
+# Sitemap & Crawler Manifest Compiler: generate_sitemap
+# ============================================================================
+# Uses PHP CLI (`php -r`) to walk `raggiesoft.com/www/data/routes/*.json`, skip
+# redirects/APIs/`noindex` routes, compute truthful `<lastmod>` dates from `.php`
+# view file modification times (`filemtime`), and emit 4 crawler files:
+#   1. `sitemap.xml`         (single-host routes for `https://raggiesoft.com`)
+#   2. `sitemap-network.xml` (`<sitemapindex>` linking all 10 `raggiesoft.com` + subdomain sitemaps)
+#   3. `robots.txt`          (crawler rules + `Sitemap:` directives)
+#   4. `<INDEXNOW_KEY>.txt`  (IndexNow domain ownership verification file)
 function generate_sitemap() {
     echo "👱‍♀️ JENNA: Generating XML Sitemap, robots.txt, and IndexNow verification key..."
     (
@@ -758,6 +854,12 @@ PYEOF
     done
 }
 
+# ============================================================================
+# Mode 1: do_pull (`./jenna-sync.sh --pull`)
+# ============================================================================
+# Pulls latest `origin/main` commits across all 15 GitHub repositories (cloning
+# any missing repo automatically) and pulls public CDN files down from DigitalOcean
+# Spaces (`do-spaces:assets.raggiesoft.com` -> `$ASSETS_ROOT`).
 function do_pull() {
     echo "👱‍♀️ JENNA: On it! Bringing everything down to your machine..."
     echo "          $CONNECTION_MSG"
@@ -850,6 +952,8 @@ function do_pull() {
         cd "$NGINX_CONFIG_ROOT" && git pull origin main
     fi
     
+    # Pull public CDN assets down from DigitalOcean Spaces (`rclone sync <remote> <local>`),
+    # excluding `.git/` and private `vault/`/`master-wav/` paths so local Git metadata isn't wiped!
     echo "   6. Hauling the heavy boxes (DigitalOcean Spaces)..."
     run_cdn_preflight
     if [ "$CAN_SYNC_CDN" = true ]; then
@@ -876,7 +980,11 @@ function do_pull() {
     finalize_jenna_exit
 }
 
+# ============================================================================
+# Mode 2: do_push (`./jenna-sync.sh --push -m "Message" [-t "v1.0.0"]`)
+# ============================================================================
 function do_push() {
+    # Require a commit message (`-m`) or release tag (`-t`) so history stays documented
     if [[ -z "$COMMIT_MSG" && -z "$TAG_NAME" ]]; then
         echo "🛑 JENNA: MISSING COMMIT MESSAGE"
         show_help
@@ -889,7 +997,9 @@ function do_push() {
 
     run_github_preflight
 
-    # --- PRE-FLIGHT TAG CHECK ---
+    # --- PRE-FLIGHT RELEASE TAG COLLISION CHECK ---
+    # If `-t "v1.x.y"` was passed, verify neither local `git show-ref --tags` nor remote
+    # `git ls-remote --tags` already has that tag before modifying any repository!
     if [ -n "$TAG_NAME" ]; then
         echo "👱‍♀️ JENNA: Validating tag '$TAG_NAME'..."
         if [ -d "$HUB_ROOT" ]; then
@@ -929,10 +1039,10 @@ function do_push() {
         fi
     fi
 
-    # 1. QA Check
+    # 1. QA Check (WCAG Alt Text + Missing PHP View 404 Guard)
     run_integrity_check
 
-    # 0. SYNC COMPONENTS LIBRARY
+    # 0. SYNC SHARED COMPONENTS LIBRARY (`command cp -rf` bypasses any `alias cp='cp -i'` prompt!)
     echo "   -> Syncing /components-library to applications..."
     if [ -d "$SERVER_ROOT/components-library" ]; then
         if [ -d "$HUB_ROOT" ]; then
@@ -945,10 +1055,10 @@ function do_push() {
         fi
     fi
 
-    # 2. Orphan Audit
+    # 2. Orphan & Exposed-Draft Audit
     run_orphan_audit
 
-    # 3. Generate Sitemap
+    # 3. Generate Hub XML Sitemaps, `robots.txt`, & IndexNow Key
     generate_sitemap
 
     echo "👱‍♀️ JENNA: Shipping it! Message: \"$COMMIT_MSG\""
@@ -960,7 +1070,7 @@ function do_push() {
     fi
     echo "          $CONNECTION_MSG"
 
-    # --- PRE-PUSH NARRATIVE BUILD ---
+    # --- PRE-PUSH NARRATIVE, ASSET MINIFICATION, PAIGE, & PANDOC EBOOK PIPELINE ---
     echo "👱‍♀️ JENNA: Generating AI Context Lumps..."
     if [ -f "$NARRATIVES_ROOT/scripts/lump_narratives.php" ]; then
         php "$NARRATIVES_ROOT/scripts/lump_narratives.php"
@@ -970,7 +1080,8 @@ function do_push() {
     fi
 
     echo "      > Building Stardust Engine Assets..."
-    # Local minification (so the .min files are pushed to GitHub and the CDN)
+    # Inline PHP CSS/JS Minifier: concatenates `css/src/*.css`, strips `/* ... */` block comments
+    # and extra whitespace via `preg_replace` / `str_replace`, and emits `.min.css` & `.min.js`!
     php -r '
         $dir = "'"$ASSETS_ROOT"'/stardust-engine-library";
         if (is_dir($dir)) {
@@ -1003,6 +1114,8 @@ function do_push() {
         }
     '
 
+    # Invoke Paige (`paige.php`) to compile all book TOCs, Story Crossroads graphs, Story Arcs,
+    # hovercards, `<slug>-package.7z` archives, `search-index.json`, and Book Reader XML sitemaps!
     echo "👱‍♀️ JENNA: Calling Paige (paige.php) to compile Narratives & Books..."
     if [ -f "$DEPLOYMENT_TOOLS_ROOT/paige.php" ]; then
         php "$DEPLOYMENT_TOOLS_ROOT/paige.php"
@@ -1014,6 +1127,8 @@ function do_push() {
         echo "⚠️  JENNA: Could not find paige.php in raggiesoft-deployment-tools. Skipping compilation."
     fi
 
+    # Invoke `compile_ebooks.php` (uses Pandoc + WeasyPrint + `.ebook_build_hash` incremental caching
+    # to render Illustrated & Text-Only `.epub` and `.pdf` deliverables into `raggiesoft-assets/raggiesoft-books/books/<slug>/`).
     echo "👱‍♀️ JENNA: Generating EPUB and PDF eBooks..."
     if [ -f "$NARRATIVES_ROOT/scripts/compile_ebooks.php" ]; then
         php "$NARRATIVES_ROOT/scripts/compile_ebooks.php"
@@ -1025,7 +1140,20 @@ function do_push() {
         echo "⚠️  JENNA: Could not find compile_ebooks.php. Skipping eBook generation."
     fi
 
-    # 4. HUB PUSH
+    # ============================================================================
+    # HOW JENNA'S 3-BRANCH GIT COMMIT & PUSH IDIOM WORKS (REPEATED PER REPOSITORY):
+    #   1. `git add .` (or `git add -A`) stages modified, added, and deleted files.
+    #   2. `if ! git diff-index --quiet HEAD --; then`:
+    #      `git diff-index --quiet HEAD --` returns exit code `1` (false) when staged
+    #      changes exist! `!` flips that to true -> commits with `$COMMIT_MSG` & pushes.
+    #   3. `elif [ "$(git log origin/main..HEAD 2>/dev/null)" ]; then`:
+    #      What if we committed locally earlier on airplane/blocked WiFi (`CAN_PUSH_GITHUB=false`)
+    #      and now have WiFi again with zero new file edits? `origin/main..HEAD` lists any
+    #      local commits ahead of GitHub and pushes them automatically!
+    #   4. `else`: Repository is 100% clean & synced—skip in milliseconds!
+    # ============================================================================
+
+    # 4. HUB PUSH (`raggiesoft.com/www`)
     echo "   1. Packaging the Hub..."
     if [ -d "$HUB_ROOT" ]; then
         cd "$HUB_ROOT"
@@ -1115,7 +1243,7 @@ function do_push() {
         fi
     fi
 
-    # 4.7 NEBULAE PUSH
+    # 4.7 NEBULAE PUSH (`nebulae.raggiesoft.com`)
     echo "   -> Packaging the Nebulae Cosmic Observatory (nebulae.raggiesoft.com)..."
     if [ -d "$NEBULAE_ROOT" ]; then
         cd "$NEBULAE_ROOT"
@@ -1152,6 +1280,7 @@ function do_push() {
         fi
     fi
 
+    # 4.75 BOOKS REPO PUSH (`books.raggiesoft.com` — includes fresh route maps & sitemaps generated by `paige.php`!)
     echo "   -> Checking Books Repo..."
     if [ -d "$BOOKS_ROOT" ]; then
         cd "$BOOKS_ROOT"
@@ -1180,7 +1309,12 @@ function do_push() {
         fi
     fi
 
-    # 4.8 LORE PUSH
+    # 4.8 LORE PUSH (`lore.raggiesoft.com` — Next.js 16 + React 19 + Tailwind CSS v4 Static Graph)
+    # Note the self-healing Next.js 16 security auto-upgrade pattern:
+    #   1. `auto_upgrade_nextjs_if_requested` checks if Next.js has published a required security patch.
+    #   2. Runs `npm run build` via `run_non_interactive_npm` (`< /dev/null`).
+    #   3. If `$? -ne 0` (`$?` = exit code of the immediately preceding command; `-ne 0` = non-zero / failed),
+    #      re-runs `auto_upgrade_nextjs_if_requested` + `npm run build` once before aborting (`exit 1`)!
     echo "   -> Packaging the Lore Graph..."
     if [ -d "$LORE_ROOT" ]; then
         cd "$LORE_ROOT"
@@ -1200,10 +1334,12 @@ function do_push() {
         
         git add .
         
+        # `! git diff-index --quiet HEAD --` is true when staged/working files differ from `HEAD`:
         if ! git diff-index --quiet HEAD --; then
              git commit -m "$COMMIT_MSG"
              git push $FORCE_FLAG origin main
              echo "      ✓ Lore committed and sent to GitHub."
+        # Otherwise check if local `HEAD` has unpushed commits ahead of `origin/main` (`origin/main..HEAD`):
         elif [ "$(git log origin/main..HEAD 2>/dev/null)" ]; then
              echo "      ⚠️  Found pending Lore commits. Pushing now..."
              git push $FORCE_FLAG origin main
@@ -1223,7 +1359,10 @@ function do_push() {
         fi
     fi
 
-    # 4.9 MUSIC PUSH
+    # 4.9 MUSIC PUSH (`music.raggiesoft.com` — The Listening Room, SvelteKit 2 + Svelte 5 Runes)
+    # Runs BOTH `npm run build` (compiles the production SvelteKit bundle & service worker) AND
+    # `npm run check` (`svelte-check` static TypeScript/Runes type-checker). If type-checking fails
+    # (`$? -ne 0`), Jenna halts immediately (`exit 1`) so broken UI types never ship!
     echo "   -> Packaging Engine Room Records (music.raggiesoft.com)..."
     if [ -d "$MUSIC_ROOT" ]; then
         cd "$MUSIC_ROOT"
@@ -1261,7 +1400,18 @@ function do_push() {
         fi
     fi
 
-    # 4.95 ENGINE ROOM RECORDS IMPRINT PUSH (engineroom.raggiesoft.com)
+    # ============================================================================
+    # 4.95–4.99 SPECIALIZED STATIC SUBDOMAIN BUILDS & GIT PUSHES
+    # ============================================================================
+    # HOW THE GIT GUARD CONDITIONS WORK IN SECTIONS 4.95–4.99:
+    #   - `git add -A`: Stages all new, modified, AND deleted files across the repo.
+    #   - `! git rev-parse --verify HEAD &>/dev/null`: Handles a brand-new `git init` repo
+    #     that has ZERO commits yet (where `HEAD` does not exist yet, so `diff-index HEAD` fails!).
+    #   - `if git remote get-url origin &>/dev/null`: Checks whether a GitHub `origin` URL is
+    #     configured yet—if yes, pushes with `git push -u` (`-u` = `--set-upstream`, linking local
+    #     `main` to `origin/main` for future pulls/pushes); if no, commits cleanly locally!
+
+    # 4.95 ENGINE ROOM RECORDS IMPRINT PUSH (`engineroom.raggiesoft.com` — Astro 6 Static SSG)
     if [ -d "$ENGINEROOM_ROOT" ] && [ -f "$ENGINEROOM_ROOT/package.json" ]; then
         echo "   -> Packaging Engine Room Records Imprint (engineroom.raggiesoft.com)..."
         cd "$ENGINEROOM_ROOT"
@@ -1289,7 +1439,7 @@ function do_push() {
         fi
     fi
 
-    # 4.96 THE STARDUST ENGINE PUSH (stardust.raggiesoft.com)
+    # 4.96 THE STARDUST ENGINE PUSH (`stardust.raggiesoft.com` — Nuxt 4 + Vue 3 Static SSG)
     if [ -d "$STARDUST_ROOT" ] && [ -f "$STARDUST_ROOT/package.json" ]; then
         echo "   -> Packaging The Stardust Engine (stardust.raggiesoft.com)..."
         cd "$STARDUST_ROOT"
@@ -1317,7 +1467,7 @@ function do_push() {
         fi
     fi
 
-    # 4.97 RAGGIESOFT MEDIA CORPORATE HUB PUSH (corporate.raggiesoft.com)
+    # 4.97 RAGGIESOFT MEDIA CORPORATE HUB PUSH (`corporate.raggiesoft.com` — Bootstrap 5.3.8 Static SSG)
     if [ -d "$CORPORATE_ROOT" ] && [ -f "$CORPORATE_ROOT/package.json" ]; then
         echo "   -> Packaging RaggieSoft Media Corporate Hub (corporate.raggiesoft.com)..."
         cd "$CORPORATE_ROOT"
@@ -1345,7 +1495,7 @@ function do_push() {
         fi
     fi
 
-    # 4.98 RAGGIESOFT STORETRAINER PUSH (storetrainer.raggiesoft.com)
+    # 4.98 RAGGIESOFT STORETRAINER PUSH (`storetrainer.raggiesoft.com` — Vanilla TypeScript + Classic Win32 CSS)
     if [ -d "$STORETRAINER_ROOT" ] && [ -f "$STORETRAINER_ROOT/package.json" ]; then
         echo "   -> Packaging RaggieSoft StoreTrainer (storetrainer.raggiesoft.com)..."
         cd "$STORETRAINER_ROOT"
@@ -1373,7 +1523,7 @@ function do_push() {
         fi
     fi
 
-    # 4.99 RAGGIESOFT BACKSTAGE PUSH (backstage.raggiesoft.com)
+    # 4.99 RAGGIESOFT BACKSTAGE PUSH (`backstage.raggiesoft.com` — Web Awesome Pro + Font Awesome Pro+ SSG & PWA)
     if [ -d "$BACKSTAGE_ROOT" ] && [ -f "$BACKSTAGE_ROOT/package.json" ]; then
         echo "   -> Packaging RaggieSoft Backstage (backstage.raggiesoft.com)..."
         cd "$BACKSTAGE_ROOT"
@@ -1402,7 +1552,7 @@ function do_push() {
     fi
 
 
-    # 4.10 PORTFOLIO PUSH (Executive Systems Architect Dossier - michaelpragsdale.com)
+    # 4.10 PORTFOLIO PUSH (`michaelpragsdale.com` — Angular 19 Zoneless Build)
     echo "   -> Packaging Executive Systems Architect Dossier (michaelpragsdale.com)..."
     if [ -d "$PORTFOLIO_ROOT" ]; then
         cd "$PORTFOLIO_ROOT"
@@ -1415,6 +1565,8 @@ function do_push() {
         fi
 
         if [ -d "$PORTFOLIO_ROOT/.git" ]; then
+            # If the local repo was re-initialized without common ancestor (`! git merge-base`),
+            # `git reset --soft origin/main` keeps our newly built working files while attaching cleanly onto `origin/main`!
             if git remote get-url origin &>/dev/null; then
                 git fetch origin main 2>/dev/null || true
                 if git rev-parse --verify origin/main &>/dev/null && ! git merge-base origin/main HEAD &>/dev/null; then
@@ -1454,7 +1606,7 @@ function do_push() {
         fi
     fi
 
-    # 4.11 DEPLOYMENT TOOLS PUSH (/raggiesoft-deployment-tools)
+    # 4.11 DEPLOYMENT TOOLS PUSH (`/raggiesoft-deployment-tools` — syncs Jenna, Sarah, Paige, & Harper to GitHub!)
     echo "   -> Packaging Deployment Tools (/raggiesoft-deployment-tools)..."
     if [ -d "$DEPLOYMENT_TOOLS_ROOT/.git" ]; then
         cd "$DEPLOYMENT_TOOLS_ROOT"
@@ -1477,7 +1629,7 @@ function do_push() {
         fi
     fi
 
-    # 4.12 NGINX CONFIG PUSH (/nginx-config)
+    # 4.12 NGINX CONFIG PUSH (`/nginx-config` — picked up atomically by Sarah's `sync_nginx_vhosts`!)
     echo "   -> Packaging Nginx Configurations (/nginx-config)..."
     if [ -d "$NGINX_CONFIG_ROOT/.git" ]; then
         cd "$NGINX_CONFIG_ROOT"
@@ -1500,12 +1652,12 @@ function do_push() {
         fi
     fi
 
-    # 5. ASSETS PUSH
+    # 5. ASSETS REPOSITORY PUSH (`raggiesoft-assets` -> GitHub)
     echo "   2. Packaging the Assets Repository..."
     cd "$ASSETS_ROOT"
     
     echo "      > Building Stardust Engine Assets..."
-    # Local minification (so the .min files are pushed to GitHub and the CDN)
+    # Re-verify `.min.css` and `.min.js` right before staging `raggiesoft-assets`
     php -r '
         $dir = "'"$ASSETS_ROOT"'/stardust-engine-library";
         if (is_dir($dir)) {
@@ -1557,7 +1709,13 @@ function do_push() {
         fi
     fi
     
-    # 6. CDN SYNC (Public Assets Only - Vaults & Master-WAVs live locally in /raggiesoft-vaults)
+    # 6. DIGITALOCEAN SPACES CDN SYNC (`rclone sync "$ASSETS_ROOT" do-spaces:assets.raggiesoft.com`)
+    # HOW `rclone sync` & SECURITY EXCLUSIONS WORK:
+    #   - `rclone sync <source> <dest>` makes the S3/Spaces bucket `assets.raggiesoft.com`
+    #     an exact 1:1 mirror of `$ASSETS_ROOT`—uploading new/modified files AND pruning deleted ones!
+    #   - `--s3-acl public-read` marks uploaded images, 128k MP3s, and eBooks world-readable over HTTPS.
+    #   - `--exclude "/.git/**"`, `--exclude "**/vault/**"`, and `--exclude "**/master-wav/**"`
+    #     guarantee internal Git history and lossless studio master audio NEVER reach public CDN storage!
     echo "   3. Beaming public web assets to the CDN (Vaults & Master-WAVs excluded)..."
     run_cdn_preflight
     if [ "$CAN_SYNC_CDN" = true ]; then
@@ -1584,6 +1742,7 @@ function do_push() {
     else
         echo "👱‍♀️ JENNA: Finished! Code/narratives are committed (and pushed if GitHub was reachable); CDN sync was skipped because DigitalOcean Spaces is blocked on this WiFi."
     fi
+    # Wake Sarah over SSH for immediate live server deployment & ping IndexNow search engines
     if [ "$CAN_PUSH_GITHUB" = true ]; then
         trigger_remote_sarah_deploy
         submit_indexnow_pings
@@ -1591,12 +1750,15 @@ function do_push() {
     finalize_jenna_exit
 }
 
-# --- UNIFIED ARGUMENT PARSER ---
+# ============================================================================
+# 4. UNIFIED CLI ARGUMENT PARSER & ACTION DISPATCHER
+# ============================================================================
 ACTION=""
 COMMIT_MSG=""
 TAG_NAME=""
 FORCE_FLAG=""
 
+# Parse flags one-by-one (`shift` advances `$2 -> $1`; flags with a value like `-m "msg"` call `shift` twice!)
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --push) ACTION="push" ;;
@@ -1611,10 +1773,11 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
+# `-P` = live progress readout, `--transfers=8` = 8 parallel S3 file streams at once
 RCLONE_PERF_FLAGS=(-P --transfers=8 --contimeout=5s --timeout=15s --retries=1 --low-level-retries=1)
 CONNECTION_MSG="🚀 AUTOMATIC PRE-FLIGHT MODE: 5-second GitHub & CDN connection tests active."
 
-# Dispatch
+# Route execution to the selected mode function
 case "$ACTION" in
     pull) do_pull ;;
     push) do_push ;;

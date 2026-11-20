@@ -1,65 +1,75 @@
 #cloud-config
-
 # ==============================================================================
-# ARCHITECTURAL BLOCK: CLAIRE - INFRASTRUCTURE ARCHITECT
+# ARCHITECTURAL BLOCK: CLAIRE - INFRASTRUCTURE ARCHITECT (cloud-init.sh)
 # ==============================================================================
-# This cloud-config YAML file provisions the foundational infrastructure for 
-# the RaggieSoft environment. It is processed by cloud-init upon initial 
-# instance boot. 
-# 
-# Key Responsibilities:
-# 1. User Provisioning (Creating the `michael` admin user with SSH keys).
-# 2. System Housekeeping (Package updates).
-# 3. File Injection (Deploying Nginx configs, Deployment scripts, Systemd units).
-# 4. Execution Sequence (Installing software, configuring firewall, setting up 
-#    the web directory, and bootstrapping the `sarah` deployment service).
+# PLAIN-ENGLISH OVERVIEW (100-LEVEL INTRO):
+#   Despite the `.sh` filename, this file is actually a **Cloud-Init YAML
+#   blueprint**! When you spin up a brand-new Ubuntu Linux server ("Droplet") on
+#   DigitalOcean, you paste this file into the "User Data" box. On the server's
+#   very first boot, Ubuntu's built-in `cloud-init` daemon sees `#cloud-config`
+#   on Line 1, Column 1 (just like a `#!/bin/bash` shebang!) and automatically:
+#     1. Creates the non-root admin user `michael` with Ed25519 SSH keys and
+#        locks out direct `root` SSH logins (`disable_root: true`).
+#     2. Writes initial Nginx virtual-host configs, an initial Sarah deployment
+#        script, and Linux `systemd` background timer units (`sarah.service` +
+#        `sarah.timer`) onto disk using YAML `write_files:` literal blocks (`|`).
+#     3. Runs `runcmd:` shell commands in order: installs Nginx + PHP 8.5-FPM +
+#        Git + UFW firewall, opens ports 22 (SSH) & 80/443 (HTTP/HTTPS), generates
+#        temporary bootstrap TLS certs, clones `raggiesoft-hub`, and starts
+#        `sarah.timer` so the server updates itself every 5 minutes!
+#
+# HOW YAML `content: |` WORKS:
+#   In YAML, a vertical bar `|` starts a **literal block scalar**—every indented
+#   line underneath is written verbatim (newlines preserved) into the target file
+#   specified by `path:`.
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
-# 1. THE GUEST LIST
+# 1. THE GUEST LIST (`users:` & SSH Hardening)
 # ------------------------------------------------------------------------------
-# Defines the system users, their access levels, and authentication methods.
+# Defines the Linux user accounts provisioned on first boot.
 users:
   - name: michael
-    # Grant sudo privileges
+    # Add `michael` to the `sudo` group for administrative tasks
     groups: sudo
-    # Define default shell as bash
+    # Set default interactive login shell to GNU Bash
     shell: /bin/bash
-    # Allow passwordless sudo for automation ease
+    # `NOPASSWD:ALL` allows non-interactive automation (`install-subdomains.sh`,
+    # `sarah-deploy.sh` `sudo -n nginx -t`) to validate/reload Nginx without hanging on a password prompt
     sudo: ['ALL=(ALL) NOPASSWD:ALL']
-    # Inject authorized SSH keys for remote access from multiple devices
+    # Public Ed25519 SSH keys (`~/.ssh/authorized_keys`)—only holders of the matching
+    # private keys on these 3 workstations can SSH into the Droplet!
     ssh_authorized_keys:
       - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFbI2in/zZldj7MeeCqnYItZzGX8AEEi6FAvmTWbJnF0 michael@windows-desktop-tower
       - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICBTirNBbMwmqi6bnlz0PCQMYBb0NRDH/rqMVvjuCEqG M2 MacBook Air
       - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHUAlAKsdD9d1tT4dmYt8gSqyErOYiEMpbM3zDVTjSZg michael@hp-laptop
 
-# Disable root login over SSH to enforce using the specific admin user ('michael')
+# Security best practice: block brute-force bots from logging in as `root` over SSH
 disable_root: true
 
 # ------------------------------------------------------------------------------
-# 2. HOUSEKEEPING
+# 2. HOUSEKEEPING (`apt` Package Index Refresh)
 # ------------------------------------------------------------------------------
-# Ensure package lists are up to date before installing any software.
+# Refresh Ubuntu's package catalog (`apt-get update`) before `runcmd` runs.
 package_update: true
-# We skip package upgrades to avoid unexpected behavioral changes or downtime
-# during initial provisioning.
+# Skip full kernel/OS `apt-get upgrade` on first boot so initial provisioning stays fast and deterministic.
 package_upgrade: false
 
 # ------------------------------------------------------------------------------
-# 3. FILE INJECTION (The Blueprints)
+# 3. FILE INJECTION (`write_files:` — Written BEFORE `runcmd:` Executes)
 # ------------------------------------------------------------------------------
-# The `write_files` directive creates files on the filesystem prior to the 
-# execution of commands. We use it to lay down configuration and scripts.
+# Cloud-init writes each item in `write_files` to `path` with exact Unix `owner`
+# and octal `permissions` (`0644` = rw-r--r--, `0755` = rwxr-xr-x executable).
 write_files:
   # --------------------------------------------------------------------------
-  # -> NGINX GATEWAY
+  # -> NGINX GATEWAY (`/etc/nginx/sites-available/raggiesoft.com.conf`)
   # --------------------------------------------------------------------------
-  # Creates the primary Nginx server block configuration for raggiesoft.com.
+  # Reverse-proxy & FastCGI gateway routing dynamic requests through PHP-FPM 8.5 (`amanda/elara.php`).
   - path: /etc/nginx/sites-available/raggiesoft.com.conf
     owner: root:root
     permissions: '0644'
     content: |
-      # Primary HTTPS server block
+      # Primary HTTPS server block (Port 443 TLS)
       server {
           server_name raggiesoft.com www.raggiesoft.com;
           root /var/www/raggiesoft.com;
@@ -68,15 +78,15 @@ write_files:
           access_log /var/log/nginx/raggiesoft_access.log;
           error_log /var/log/nginx/raggiesoft_error.log;
 
-          # Default index routed through Elara (the gateway)
+          # Default index routed through Elara (the PHP front-controller gateway; no public index.php)
           index amanda/elara.php;
 
-          # Security: Deny access to hidden files (e.g., .git, .env)
+          # Security: Deny HTTP access to hidden dotfiles (`.git`, `.env`, `.htaccess`)
           location ~ /\. {
               deny all;
           }
 
-          # Internal apps routing logic
+          # Internal apps routing logic: allow specific PHP endpoints under `/includes/components/apps/`
           location ^~ /includes/components/apps/ {
               try_files $uri $uri/ =404;
               location ~ \.php$ {
@@ -87,13 +97,14 @@ write_files:
               }
           }
 
-          # Security: Block direct access to internal includes
+          # Security: Block direct browser access to internal PHP partial templates (`/includes/`)
           location ^~ /includes/ {
               deny all;
               return 404;
           }
 
-          # Asset caching and hotlink protection
+          # Static image 30-day browser caching (`expires 30d`) + Referer hotlink protection
+          # across all 9 verified Michael P. Ragsdale domains and major search engines
           location ~* \.(gif|png|jpe?g|svg|webp|ico)$ {
               valid_referers none blocked server_names 
                              *.raggiesoft.com
@@ -115,12 +126,12 @@ write_files:
               try_files $uri $uri/ =404;
           }
 
-          # Primary fallback routing: Send everything to Elara router if file not found
+          # Primary front-controller fallback: serve static file if present, else route URL to `elara.php`
           location / {
               try_files $uri $uri/ /amanda/elara.php?$query_string;
           }
 
-          # Global PHP execution logic
+          # Global PHP execution via Unix domain socket (`php8.5-fpm.sock`)
           location ~ \.php$ {
               include snippets/fastcgi-php.conf;
               fastcgi_pass unix:/var/run/php/php8.5-fpm.sock;
@@ -128,7 +139,7 @@ write_files:
               include fastcgi_params;
           }
 
-          # Custom error pages mapped to Amanda's error handlers
+          # Custom error pages mapped to Amanda's branded PHP error views
           error_page 403 /amanda/errors/403.php;
           error_page 404 /amanda/errors/404.php;
           error_page 500 /amanda/errors/500.php;
@@ -136,12 +147,12 @@ write_files:
           error_page 503 /amanda/errors/503.php;
           error_page 504 /amanda/errors/504.php;
 
-          # Make error pages internal so they can't be accessed directly
+          # `internal;` ensures users cannot visit `/amanda/errors/500.php` directly in a browser
           location ^~ /amanda/errors/ {
               internal; 
           }
 
-          # SSL Configuration
+          # TLS 1.2 / 1.3 Configuration (Port 443)
           listen 443 ssl; 
           ssl_certificate /etc/nginx/ssl/raggiesoft.pem; 
           ssl_certificate_key /etc/nginx/ssl/raggiesoft.key; 
@@ -149,7 +160,7 @@ write_files:
           ssl_ciphers HIGH:!aNULL:!MD5;
       }
 
-      # HTTP to HTTPS redirect server block
+      # HTTP (Port 80) -> Permanent `301` Redirect to HTTPS (Port 443)
       server {
           if ($host = www.raggiesoft.com) {
               return 301 https://$host$request_uri;
@@ -163,21 +174,20 @@ write_files:
       }
 
   # --------------------------------------------------------------------------
-  # -> SARAH'S DEPLOYMENT SCRIPT (Staging Area)
+  # -> SARAH'S INITIAL BOOTSTRAP DEPLOYMENT SCRIPT (`/opt/sarah-deploy.sh`)
   # --------------------------------------------------------------------------
-  # A bash script representing "Sarah", an autonomous deployment agent.
-  # It checks for updates in the central repository and rsyncs them to the webroot.
+  # Initial single-hub bootstrap edition laid down before `raggiesoft-deployment-tools`
+  # is cloned into `/home/michael/raggiesoft-deployment-tools/sarah-deploy.sh` (v5.0).
   - path: /opt/sarah-deploy.sh
     owner: root:root
-    # Needs to be executable
     permissions: '0755'
     content: |
       #!/bin/bash
       
       # --- SARAH: AUTONOMOUS DEPLOYMENT (v4.1 - Systemd Edition) ---
       
-      # 0. ROOT PRIVILEGE CHECK
-      # Sarah operates in user space; root execution is blocked to enforce security boundaries.
+      # 0. ROOT PRIVILEGE CHECK (`$EUID -eq 0` detects `root` / `sudo`)
+      # Sarah operates strictly as unprivileged user `michael` so web files are never root-owned.
       if [ "$EUID" -eq 0 ]; then
           echo "[!] SARAH: WHAT ARE YOU DOING?! I explicitly told you I do not need root!"
           echo "    ABORTING: Drop the sudo and let me do my job."
@@ -185,20 +195,17 @@ write_files:
       fi
       
       # 1. CONFIGURATION
-      # Define source repository and destination web root
       REPO_DIR="/home/michael/raggiesoft-hub"
       WEB_ROOT="/var/www/raggiesoft.com"
       
-      # 2. THE INTELLIGENCE CHECK (Detect Changes)
-      # Move to repository and fetch latest state from remote origin
+      # 2. THE INTELLIGENCE CHECK (Compare Git Commit Hashes)
       cd "$REPO_DIR" || exit
       git fetch origin main
       
-      # Compare local HEAD with remote branch to detect updates
       LOCAL=$(git rev-parse HEAD)
       REMOTE=$(git rev-parse origin/main)
       
-      # If no changes, exit gracefully without deploying
+      # Fast no-op exit when GitHub hasn't received any new commits since last check
       if [ "$LOCAL" == "$REMOTE" ]; then
           exit 0
       fi
@@ -207,11 +214,9 @@ write_files:
       echo "[i] SARAH: Change detected! Jenna pushed updates."
       echo "    Previous: $LOCAL"
       echo "    New:      $REMOTE"
-      # Hard reset local to match remote state
       git reset --hard origin/main
       
       # 4. DEPLOY (Standard User Mode - No Sudo)
-      # Synchronize repository contents to web root, excluding metadata and repo-only files
       echo "[i] SARAH: Syncing files to Showroom..."
       rsync -av --delete --no-o --no-g \
           --exclude '.git' \
@@ -220,8 +225,7 @@ write_files:
           --exclude 'README.md' \
           "$REPO_DIR/" "$WEB_ROOT/"
       
-      # 5. PERMISSIONS (Self-Correction)
-      # Enforce standard web directory (755) and file (644) permissions
+      # 5. PERMISSIONS (755 for traversable directories, 644 for readable files)
       echo "[i] SARAH: Standardizing file permissions..."
       find "$WEB_ROOT" -type d -exec chmod 755 {} +
       find "$WEB_ROOT" -type f -exec chmod 644 {} +
@@ -229,9 +233,11 @@ write_files:
       echo "[*] SARAH: Deployment Complete at $(date)"
 
   # --------------------------------------------------------------------------
-  # -> SARAH'S SYSTEMD SERVICE
+  # -> SARAH'S SYSTEMD SERVICE (`/etc/systemd/system/sarah.service`)
   # --------------------------------------------------------------------------
-  # Defines the Systemd service wrapper for the Sarah deployment script.
+  # Modern Linux alternative to legacy `crontab`: a `Type=oneshot` systemd unit
+  # that runs `/home/michael/sarah-deploy.sh` strictly as `User=michael` and logs
+  # every run automatically to `journalctl -u sarah.service`!
   - path: /etc/systemd/system/sarah.service
     owner: root:root
     permissions: '0644'
@@ -242,15 +248,16 @@ write_files:
 
       [Service]
       Type=oneshot
-      # Execute as the standard user, matching the script's root check
+      # Execute as standard user `michael`, satisfying Sarah's `$EUID -eq 0` non-root guard
       User=michael
       Group=michael
       ExecStart=/home/michael/sarah-deploy.sh
 
   # --------------------------------------------------------------------------
-  # -> SARAH'S SYSTEMD TIMER
+  # -> SARAH'S SYSTEMD TIMER (`/etc/systemd/system/sarah.timer`)
   # --------------------------------------------------------------------------
-  # Schedules the Sarah deployment service to run periodically (every 5 mins).
+  # Companion systemd timer that triggers `sarah.service` 5 minutes after boot
+  # and every 5 minutes thereafter (`OnUnitActiveSec=5min`).
   - path: /etc/systemd/system/sarah.timer
     owner: root:root
     permissions: '0644'
@@ -259,70 +266,60 @@ write_files:
       Description=Run Sarah Deployment Script every 5 minutes
 
       [Timer]
-      # Start timer 5 minutes after boot
+      # First run 5 minutes after server boot
       OnBootSec=5min
-      # Trigger every 5 minutes thereafter
+      # Repeat 5 minutes after each previous run finishes
       OnUnitActiveSec=5min
-      # Ensure high accuracy for scheduled execution
+      # Prevent systemd from coalescing/delaying the 5-minute tick by up to 1 minute
       AccuracySec=1s
 
       [Install]
       WantedBy=timers.target
 
 # ------------------------------------------------------------------------------
-# 4. EXECUTION SEQUENCE
+# 4. EXECUTION SEQUENCE (`runcmd:` — Runs Once on Initial Droplet Boot)
 # ------------------------------------------------------------------------------
-# The runcmd block specifies arbitrary shell commands to run after write_files
-# are created. This sets up dependencies, directories, and starts services.
+# Each `- ...` item runs sequentially as `root` after `write_files:` completes.
 runcmd:
-  # 1. Install Core Software 
-  # Note: Ubuntu 26.04 natively ships PHP 8.5. Install Nginx, PHP-FPM, Git, UFW, etc.
+  # 1. Install Core Web Stack (Nginx, PHP 8.5 FPM + CLI extensions, Git, jq, UFW firewall)
   - apt-get update -y
   - apt-get install -y nginx php-fpm php-cli php-common php-xml php-curl php-mbstring php-zip unzip curl git jq ufw
   
-  # 2. Configure the UFW Firewall
-  # Block incoming by default, allow outgoing. Whitelist SSH and Nginx traffic.
+  # 2. Harden UFW (Uncomplicated Firewall): deny all inbound ports except SSH (22) and HTTP/HTTPS (80/443)
   - ufw default deny incoming
   - ufw default allow outgoing
   - ufw allow OpenSSH
   - ufw allow "Nginx Full"
   - ufw --force enable
   
-  # 3. Set up the Web Directory Structure & Gateway File
-  # Prepare webroot for deployment script and set permissions
+  # 3. Provision initial `/var/www/raggiesoft.com` directory owned by `michael` and a temporary health-check gateway
   - mkdir -p /var/www/raggiesoft.com/amanda/errors
   - chown -R michael:michael /var/www/raggiesoft.com
   - chmod -R 755 /var/www/raggiesoft.com
-  # Inject an initial placeholder gateway file so Nginx doesn't crash on start
   - echo "<?php echo 'Elara Gateway 5.7 Initialized. Awaiting Sarah deployment.'; ?>" > /var/www/raggiesoft.com/amanda/elara.php
   
-  # 4. Create SSL Directory and Temporary Certs
-  # Generate self-signed certs to allow Nginx to bind to port 443 during initialization
+  # 4. Generate temporary self-signed X.509 SSL certificate so `nginx` can start on Port 443 immediately
+  #    before Cloudflare Origin / Let's Encrypt certificates are installed
   - mkdir -p /etc/nginx/ssl
   - openssl req -x509 -nodes -days 30 -newkey rsa:2048 -keyout /etc/nginx/ssl/raggiesoft.key -out /etc/nginx/ssl/raggiesoft.pem -subj "/CN=raggiesoft.com"
   
-  # 5. Activate the Nginx Configuration
-  # Remove the default Ubuntu Nginx page and symlink our raggiesoft block
+  # 5. Enable our Nginx virtual host by symlinking `sites-available` -> `sites-enabled` and removing `default`
   - rm -f /etc/nginx/sites-enabled/default
   - ln -s /etc/nginx/sites-available/raggiesoft.com.conf /etc/nginx/sites-enabled/
   
-  # 6. Activate Sarah's Systemd Timer
-  # Reload systemd manager to pick up new timer/service units, then enable and start the timer
+  # 6. Register and start `sarah.timer` in systemd (`daemon-reload` reads our newly injected unit files)
   - systemctl daemon-reload
   - systemctl enable sarah.timer
   - systemctl start sarah.timer
   
-  # 7. Optimize and Restart Services
-  # Restart and enable PHP-FPM and Nginx to ensure they apply the new configurations
+  # 7. Restart and enable PHP 8.5-FPM and Nginx across reboots
   - systemctl restart php8.5-fpm
   - systemctl enable php8.5-fpm
   - systemctl restart nginx
   - systemctl enable nginx
 
-  # 8. CLONE THE REPOSITORY (The Hand-off)
-  # Clone the web application source code as the user 'michael'
+  # 8. Clone `raggiesoft-hub` as user `michael` (`sudo -u michael` avoids creating root-owned `.git` files)
   - sudo -u michael git clone https://github.com/raggiesoft/raggiesoft-hub.git /home/michael/raggiesoft-hub
 
-  # 9. WAKE SARAH UP 
-  # Manually trigger the first deployment run immediately rather than waiting 5 minutes
+  # 9. Trigger the very first deployment immediately instead of waiting 5 minutes for `sarah.timer`
   - systemctl start sarah.service

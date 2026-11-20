@@ -1,28 +1,26 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# HARPER MODULE 04: TRACK PROCESSOR
+# HARPER MODULE 04: TRACK PROCESSOR (`harper/04-track-processor.sh`)
 # ==============================================================================
-# Architecture & Purpose:
-# Sourced in a loop by `03-album-processor.sh`. Processes a single track JSON 
-# object to generate metadata sheets, append to the master discography, sanitize 
-# lyrics for DSP ingestion, isolate vocals, generate VTT sync files, and spawn 
-# parallel background audio encoding tasks.
-#
-# Key Operations:
-# 1. Parses JSON for track details (Title, Disc, Number, ISRC, etc.).
-# 2. Stamps Broadcast Wave Format (BWF) metadata into local master copy.
-# 3. Formats and writes the DistroKid quick-copy metadata sheet.
-# 4. Scrubs markdown tags from lyrics to create pure text for DSP upload.
-# 5. Verifies and syncs `SYNC_TYPE: HUMAN_VERIFIED` WebVTT (`.vtt`) files generated
-#    via Google Gemini Multimodal Audio Listening (WhisperX/Demucs permanently retired),
-#    and queues any newly mastered vocal tracks lacking a `.vtt` for Gemini.
-# 6. Spawns `press_audio_formats` asynchronously for multi-tier rendering.
-#
-# Maintenance Notes:
-# - `$track_json` must be defined in the parent shell loop prior to sourcing.
-# - WebVTT (`.vtt`) timed lyric generation is handled by Google Gemini listening
-#   directly to the rendered audio alongside `lyrics/$FILE_BASE.md`.
-# - Leverages `jobs -p` logic to throttle parallel FFmpeg spawns to `$MAX_JOBS`.
+# PLAIN-ENGLISH OVERVIEW (100-LEVEL INTRO):
+#   Module 04 is Harper's inner loop—sourced once for EVERY single song in
+#   `tracks.json`! For each song (`$track_json`), it performs 7 studio jobs:
+#     1. Extracts `fileName`, `title`, `version`, `disc`, `track`, and appends
+#        the song to `read-me.txt` and the artist's Master Discography Markdown.
+#     2. Auto-mints an Official US ISRC (`QTAHP` + `YY` + `NNNNN`) when a song's
+#        master WAV exists on disk without an ISRC—inheriting any existing ISRC
+#        if the exact same `masterWavPath` was already released on another album!
+#     3. Assigns an internal Engine Room Records ID (`ERR-001..ERR-008`) and
+#        appends a JSON-Lines row to `temp_catalog_index.jsonl`.
+#     4. Measures exact `M:SS` track runtime via `ffprobe`, saves it back into
+#        `tracks.json`, and stamps **Broadcast Wave Format (BWF)** RIFF/BEXT
+#        headers into `$ALBUM_VAULT_DIR/wav/<fileName>.wav` via `-c copy` (zero
+#        audio re-encoding—100% lossless bit-stream copy!).
+#     5. Generates a per-song DistroKid Quick-Copy sheet (`song-metadata/<file>.md`).
+#     6. Scrubs Markdown/structural tags (`[Chorus]`, `(Verse 1)`) out of
+#        `lyrics/<file>.md` using `sed -E` to produce clean plain-text DSP lyrics,
+#        and keeps `NOTE SYNC_TYPE: HUMAN_VERIFIED` `.vtt` timed lyrics synced 1:1.
+#     7. Spawns `press_audio_formats` asynchronously (`&`) up to `$MAX_JOBS` workers!
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -47,7 +45,7 @@ TRACK_NUM=`echo "$track_json" | jq -r '.track'`
 SUITE_NAME=`echo "$track_json" | jq -r '.suiteName // empty'`
 SUITE_TRACK=`echo "$track_json" | jq -r '.suiteTrack // empty'`
 
-# Build tracklist entry for the album read-me
+# Append tracklist line to `read-me.txt` (inserting a `--- Suite Name ---` banner before multi-part rock opera suites)
 if [ -n "$SUITE_NAME" ]; then
     if [ "$SUITE_TRACK" == "1" ]; then
         echo "" >> "$README_FILE"
@@ -60,13 +58,13 @@ fi
 
 echo "      🎙️  HARPER: Checking Track $TRACK_NUM - '$TAG_TITLE'..."
 
-# Append to the Master Discography markdown
+# Append song heading and converted lore/lyrics to the artist's Master Discography Markdown
 echo "## $TAG_TITLE" >> "$MASTER_DISCO_FILE"
 
 LYRIC_MD_PATH="lyrics/$FILE_BASE.md"
 
 if [ -f "$LYRIC_MD_PATH" ]; then
-    # Convert internal syntax tags to standard markdown headers
+    # `sed -e 's/find/replace/'` ("stream editor") converts bold markers into clean `###` Markdown subheadings
     sed -e 's/\*\*LORE NOTE:\*\*/### Lore/' \
         -e 's/\*\*LYRICS:\*\*/### Lyrics/' \
         "$LYRIC_MD_PATH" >> "$MASTER_DISCO_FILE"
@@ -80,7 +78,7 @@ MASTER_WAV_PATH=`echo "$track_json" | jq -r '.masterWavPath // empty'`
 ISRC_CODE=`echo "$track_json" | jq -r '.isrc // empty'`
 DSP_STATUS_OVERRIDE=`echo "$track_json" | jq -r '.dspStatus // empty'`
 
-# Resolve Master WAV path early so we know if the recording exists on disk
+# Resolve Master WAV source path (`/raggiesoft-vaults/.../master-wav/...`) vs. album vault WAV destination
 MASTER_DIR="${MASTER_WAV_DIR:-$VAULTS_ROOT/$ARTIST_SLUG/master-wav}"
 SOURCE_WAV="$MASTER_DIR/$MASTER_WAV_PATH.wav"
 LOCAL_WAV="${ALBUM_VAULT_DIR:-vault}/wav/$FILE_BASE.wav"
@@ -88,19 +86,16 @@ LOCAL_WAV="${ALBUM_VAULT_DIR:-vault}/wav/$FILE_BASE.wav"
 # ------------------------------------------------------------------------------
 # 1b. Official US ISRC Agency Auto-Minter (Prefix: QTAHP • Registrant ID: 185611)
 # ------------------------------------------------------------------------------
-# If a completed sound recording ($SOURCE_WAV exists on disk) does not yet have
-# an ISRC in `tracks.json`:
-# 1. First check if the identical recording (`$ARTIST_SLUG|$MASTER_WAV_PATH`)
-#    already has an ISRC assigned on another album/compilation; if so, inherit it
-#    to obey the US ISRC Agency Single-ISRC-Per-Recording rule.
-# 2. Otherwise, if the album is not locked to an external distributor UPC hold
-#    (`[ -z "$ALBUM_UPC" ]`), check `$TEMP_ISRC_GAPS_FILE` first and pop the
-#    lowest unassigned sequential gap code (`1..max_seq`) before incrementing
-#    past `$TEMP_ISRC_COUNTER_FILE` (`max_seq + 1`). Persist the minted code
-#    directly into `tracks.json` and register it in `$TEMP_WAV_ISRC_MAP`.
+# ATOMIC JSON UPDATE PATTERN (`jq ... tracks.json > tracks.json.tmp && mv tracks.json.tmp tracks.json`):
+#   In Unix shells, NEVER write `jq ... tracks.json > tracks.json`! The shell opens
+#   `> tracks.json` and wipes it to 0 bytes BEFORE `jq` even starts reading it!
+#   Writing to `tracks.json.tmp` first and atomically renaming (`mv`) once `jq`
+#   exits `0` (`&&`) guarantees `tracks.json` can never be corrupted!
 MINTED_NEW_ISRC=false
 if [ -z "$ISRC_CODE" ] || [ "$ISRC_CODE" == "null" ]; then
     ISRC_CODE=""
+    # Step A: Check `$TEMP_WAV_ISRC_MAP` via `awk -F'\t'` (tab-delimited lookup) to see if this
+    # exact recording (`$ARTIST_SLUG|$MASTER_WAV_PATH`) already has an ISRC on another release!
     if [ -n "$MASTER_WAV_PATH" ] && [ -f "$TEMP_WAV_ISRC_MAP" ]; then
         EXISTING_WAV_ISRC=$(awk -F'\t' -v key="$ARTIST_SLUG|$MASTER_WAV_PATH" '$1 == key {print $2; exit}' "$TEMP_WAV_ISRC_MAP")
         if [ -n "$EXISTING_WAV_ISRC" ]; then
@@ -108,12 +103,17 @@ if [ -z "$ISRC_CODE" ] || [ "$ISRC_CODE" == "null" ]; then
             MINTED_NEW_ISRC=true
             ALBUM_MINTED_NEW_ISRC=true
             echo "      🔗 HARPER: Linked existing recording ISRC $ISRC_CODE for shared master '$MASTER_WAV_PATH'"
+            # Atomically update `tracks.json` via a `.tmp` file + `mv` (because reading and writing
+            # the same file in one pipeline `jq ... tracks.json > tracks.json` would truncate it to 0 bytes!):
             jq --arg isrc "$ISRC_CODE" --arg file "$FILE_BASE" \
               'if type == "array" then map(if .fileName == $file then .isrc = $isrc else . end) else .tracks |= map(if .fileName == $file then .isrc = $isrc else . end) end' \
               tracks.json > tracks.json.tmp && mv tracks.json.tmp tracks.json
         fi
     fi
 
+    # Step B: If brand-new recording (`-f "$SOURCE_WAV"`) and album is not locked to a pre-existing UPC:
+    # `[ -s "$TEMP_ISRC_GAPS_FILE" ]` checks if the gaps file is non-empty (`-s` = file size > 0 bytes).
+    # `head -n 1` pops the first gap number, and `tail -n +2` keeps line 2 onward!
     if [ -z "$ISRC_CODE" ] && [ -z "$ALBUM_UPC" ] && [ -n "$MASTER_WAV_PATH" ] && [ -f "$SOURCE_WAV" ]; then
         if [ -s "$TEMP_ISRC_GAPS_FILE" ]; then
             # Pop the lowest unassigned sequential gap integer first to maintain a 100% contiguous QTAHP ledger
@@ -139,9 +139,9 @@ if [ -z "$ISRC_CODE" ] || [ "$ISRC_CODE" == "null" ]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 2. Engine Room Records Internal Catalog Routing
+# 2. Engine Room Records Internal Catalog Routing (`ERR-001` .. `ERR-008`)
 # ------------------------------------------------------------------------------
-# Assign internal catalog prefixes based on artist persona
+# Maps each fictional band on the Engine Room Records roster to its permanent label catalog prefix:
 case "$ALBUM_ARTIST" in
     "The Stardust Engine") ROSTER_PREFIX="ERR-001" ;;
     "Fractured Prisms") ROSTER_PREFIX="ERR-002" ;;
@@ -166,7 +166,8 @@ else
     RELEASE_STATUS="Pending DSP"
 fi
 
-# Append flat record to the temporary search catalog JSONL
+# `jq -n -c --arg key "$val" '{...}'` constructs a brand-new (`-n` = null input) JSON object
+# safely escaping quotes/unicode in every `--arg` variable, compacted onto 1 line (`-c`) for `.jsonl`!
 jq -n -c \
     --arg err_id "$ERR_ID" \
     --arg isrc "$ISRC_CODE" \
@@ -208,7 +209,7 @@ jq -n -c \
     }' >> "$ROOT_DIR/$TEMP_CATALOG_INDEX"
 
 # ------------------------------------------------------------------------------
-# 3. Master Audio Verification & BWF Stamping
+# 3. Master Audio Verification & Lossless Broadcast Wave Format (BWF) Stamping
 # ------------------------------------------------------------------------------
 MASTER_DIR="${MASTER_WAV_DIR:-$VAULTS_ROOT/$ARTIST_SLUG/master-wav}"
 SOURCE_WAV="$MASTER_DIR/$MASTER_WAV_PATH.wav"
@@ -218,7 +219,8 @@ RUNTIME=""
 if [ ! -f "$SOURCE_WAV" ]; then 
     echo "         ⚠️  WHOA! Master tape missing from central vault: $SOURCE_WAV"
 else
-    # Extract track duration programmatically for JSON updates
+    # `ffprobe` reads the exact floating-point duration in seconds (e.g., `245.32`), and `awk`
+    # divides by 60 (`$1/60`) + modulo 60 (`$1%60`) to format `"4:05"`!
     RUNTIME=`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$SOURCE_WAV" | awk '{printf "%d:%02d\n", $1/60, $1%60}'`
     echo "      ⏱️  HARPER: Track runtime clocked at $RUNTIME"
 
@@ -227,9 +229,12 @@ else
             echo "         -> 💾 Stamping BWF Metadata (ISRC: $ISRC_CODE, Title: '$TAG_TITLE') and pulling $MASTER_WAV_PATH to $LOCAL_WAV..."
             mkdir -p "${ALBUM_VAULT_DIR:-vault}/wav"
             
-            # Replaces the standard cp command with a lossless FFmpeg metadata pass
-            # Stuffs metadata directly into the RIFF INFO and BEXT chunks of the WAV
-            # Uses $TAG_TITLE ("$songName ($versionInformation)") when version is present
+            # HOW BROADCAST WAVE FORMAT (`-write_bext 1` + `-c copy`) WORKS:
+            #   Standard `.wav` files often lack artist/ISRC metadata, so Broadcast Wave
+            #   Format (EBU Tech 3285) adds a `bext` + RIFF `INFO` header chunk inside the WAV.
+            #   Passing `-c copy` ("stream copy") tells FFmpeg NOT to re-encode the audio
+            #   samples at all—it copies 100% of the raw PCM audio bytes untouched while
+            #   writing the BWF/ISRC header in milliseconds!
             ffmpeg -nostdin -hide_banner -loglevel error -y -i "$SOURCE_WAV" -write_bext 1 \
             -metadata title="$TAG_TITLE" \
             -metadata artist="$ALBUM_ARTIST" \
@@ -247,7 +252,7 @@ else
 
 fi
 
-# Store the updated runtime in the live tracks.json directly to prevent race conditions
+# Persist clocked `M:SS` runtime back into `tracks.json` atomically
 if [ -n "$RUNTIME" ]; then
     jq --arg rt "$RUNTIME" --arg file "$FILE_BASE" \
       'if type == "array" then map(if .fileName == $file then .duration = $rt else . end) else .tracks |= map(if .fileName == $file then .duration = $rt else . end) end' \
@@ -258,7 +263,7 @@ WAV_FILE="$LOCAL_WAV"
 LYRICS_CONTENT=""
 if [ -f "lyrics/$FILE_BASE.md" ]; then LYRICS_CONTENT=`cat "lyrics/$FILE_BASE.md"`; fi
 
-# Append data to the global search index payload
+# Append track search record to `temp_search_index.jsonl` (slurped into `metadata.json` by `06-finalize.sh`)
 jq -n -c \
     --arg id "$FILE_BASE" \
     --arg title "$TAG_TITLE" \
@@ -270,8 +275,12 @@ jq -n -c \
     '{id: $id, title:$title, artist: $artist, album:$album, url: $url, type:$type, content: $content}' >> "$ROOT_DIR/$TEMP_SEARCH_INDEX"
 
 # ------------------------------------------------------------------------------
-# 4. DistroKid Release Sheet Generation
+# 4. DistroKid Release Sheet Generation (`cat << EOF` Unquoted Heredoc)
 # ------------------------------------------------------------------------------
+# Note how `cat << EOF > "$METADATA_MD"` uses an UNQUOTED `EOF` delimiter:
+# unlike `<< 'PYEOF'` (single-quoted, literal text), unquoted `<< EOF` tells Bash
+# to substitute `$TITLE`, `$ISRC_CODE`, etc. directly into the Markdown template
+# while escaping literal dollar signs as `\$14.95`!
 METADATA_MD="streaming-services/song-metadata/$FILE_BASE.md"
 
 if [ -z "$ALBUM_UPC" ]; then
@@ -335,20 +344,26 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 5. DSP Lyrics Scrubbing
+# 5. DSP Plain-Text Lyrics Scrubbing (`sed -E` Multi-Stage Pipeline)
 # ------------------------------------------------------------------------------
-# DistroKid and Apple Music reject lyrics containing structural tags or formatting
+# Apple Music, Musixmatch, and DistroKid reject lyrics containing `[Verse 1]`,
+# `(Guitar Solo)`, Markdown `**bold**`, or trailing periods/commas at the ends of lines!
+# This Unix pipeline chains `sed` ("stream editor") filters left-to-right via `|`:
+#   1. `sed '1,/\*\*LYRICS:\*\*/d'` : Deletes everything from line 1 through `**LYRICS:**` (stripping the Lore Note!).
+#   2. `sed -E '/^...[[].*[]]...$/d'`: Deletes standalone `[Chorus]` / `[Guitar Solo]` cue lines.
+#   3. `sed -E '/^...[(].*[)]...$/d'`: Deletes standalone `(Backing Vocals)` parenthetical lines.
+#   4. `sed -E "/^...$REGEX_STRUCT...$/d"`: Deletes bare `Verse 1:` / `Bridge` headers.
+#   5. `s/\*\*//g` .. `s/_//g`       : Strips Markdown bold/italic markers.
+#   6. `s/[.,?!;:]+[[:space:]]*$//`  : Strips end-of-line punctuation per Apple Music lyric style rules.
+#   7. `cat -s`                      : Squeezes multiple consecutive blank lines into single stanza breaks!
 LYRIC_MD="lyrics/$FILE_BASE.md"
 LYRIC_TXT="streaming-services/lyrics/$FILE_BASE.txt"
 
 if [ -f "$LYRIC_MD" ]; then
     if [ ! -f "$LYRIC_TXT" ] || [ "$OVERWRITE" = true ]; then
         echo "         -> 📝 Scrubbing Lyrics for DSP delivery..."
-        # Regular expression matching standard structural tags like [Chorus], (Verse 1), etc.
         REGEX_STRUCT="([Vv]erse|[Cc]horus|[Bb]ridge|[Ii]ntro|[Oo]utro|[Hh]ook|[Pp]re-?[Cc]horus|[Ii]nterlude|[Ss]olo)([[:space:]]*[0-9]+)?(:)?"
         
-        # Pipeline: Strip headers -> Strip brackets -> Strip parenthesis -> Strip bare tags ->
-        # Strip markdown bold/italics -> Strip trailing punctuation -> Collapse blank lines.
         sed '1,/\*\*LYRICS:\*\*/d' "$LYRIC_MD" | \
         sed -E '/^[[:space:]]*[[](.*)[]][[:space:]]*$/d' | \
         sed -E '/^[[:space:]]*[(](.*)[)][[:space:]]*$/d' | \
@@ -364,14 +379,16 @@ if [ -f "$LYRIC_MD" ]; then
     # 6. WebVTT Verification & Google Gemini Multimodal Audio-to-VTT Queue
     #    (WhisperX & Demucs Permanently Retired in Favor of Google Gemini)
     # --------------------------------------------------------------------------
-    # ARCHITECTURAL NOTE:
-    # Frame-accurate `NOTE SYNC_TYPE: HUMAN_VERIFIED` WebVTT (`.vtt`) files are
-    # authored by Google Gemini (Antigravity) listening directly to the rendered
-    # audio (`web-mp3/$FILE_BASE.mp3` or 60–90s `ffmpeg` slices) while reading
-    # `lyrics/$FILE_BASE.md`. Harper protects existing `.vtt` files, keeps
-    # `lyrics/$FILE_BASE.vtt` and `streaming-services/lyrics/$FILE_BASE.vtt`
-    # synchronized 1:1, and queues any newly mastered vocal tracks missing a
-    # `.vtt` file so Gemini can listen and generate them.
+    # HOW WEBVTT (`.vtt`) TIMED LYRICS WORK:
+    #   The Listening Room (`music.raggiesoft.com`) highlights lyrics line-by-line
+    #   in sync with song playback using standard HTML5 **WebVTT** files stamped with
+    #   `NOTE SYNC_TYPE: HUMAN_VERIFIED` (authored by Google Gemini listening directly
+    #   to 60–90s audio slices, or via `./studio.sh`).
+    #   - If `lyrics/$FILE_BASE.vtt` exists, copy it forward to `streaming-services/lyrics/`.
+    #   - If only `streaming-services/lyrics/$FILE_BASE.vtt` exists, back-sync it to `lyrics/`.
+    #   - If NEITHER exists yet on a vocal song with audio (`-s "$LYRIC_TXT"` = non-empty lyrics),
+    #     append `$ARTIST_SLUG/$ALBUM_SLUG/$FILE_BASE` to `$TEMP_GEMINI_VTT_QUEUE` so `06-finalize.sh`
+    #     alerts the producer!
     LYRIC_VTT="streaming-services/lyrics/$FILE_BASE.vtt"
     SOURCE_VTT="lyrics/$FILE_BASE.vtt"
 
@@ -391,8 +408,16 @@ if [ -f "$LYRIC_MD" ]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 7. Asynchronous Audio Generation Spawning
+# 7. Asynchronous Audio Generation Spawning (Parallel Worker Pool)
 # ------------------------------------------------------------------------------
+# HOW BASH BACKGROUND JOBS (`&`, `$!`, `jobs -p`, `wait -n`) WORK:
+#   - Putting `&` at the end of `press_audio_formats ... &` launches that function
+#     in a parallel background subshell so this loop immediately moves on to the next track!
+#   - `$!` holds the OS Process ID (PID) of the background job just launched; `PIDS+=($!)`
+#     saves it so `03-album-processor.sh` can verify exit codes at the end of the album.
+#   - `jobs -p | wc -l` counts how many background jobs are currently active right now;
+#     if we hit `$MAX_JOBS` (e.g., 8 cores), `wait -n` pauses ONLY until the *next* single
+#     finishing worker frees up a slot!
 if [ "$METADATA_ONLY" = false ] || [ "$MINTED_NEW_ISRC" = true ]; then
     if [ -f "$WAV_FILE" ]; then
         VAULT_CHECK_DIR="${ALBUM_VAULT_DIR:-vault}"
@@ -402,13 +427,10 @@ if [ "$METADATA_ONLY" = false ] || [ "$MINTED_NEW_ISRC" = true ]; then
            [ ! -f "$VAULT_CHECK_DIR/ogg/$FILE_BASE.ogg" ] || \
            [ ! -f "$VAULT_CHECK_DIR/flac/$FILE_BASE.flac" ]; then
             echo "         -> 🎚️ Pressing Multi-Tier Audio (Parallelized, ISRC: $ISRC_CODE, Tagged Title: '$TAG_TITLE')..."
-            # Run in background to drastically speed up processing
-            # Pass $TAG_TITLE ("$songName ($versionInformation)") so ID3 tags and Vorbis Comments include version info
             press_audio_formats "$WAV_FILE" "$FILE_BASE" "$TAG_TITLE" "$ALBUM_ARTIST" "$ALBUM_NAME" "$REAL_RELEASE_YEAR" "$TRACK_NUM" "$DISC_NUM" "$GENRE" "$ISRC_CODE" &
-            # Capture PID for parent shell synchronization
             PIDS+=($!)
             
-            # Throttle concurrent jobs to prevent CPU starvation and memory exhaustion
+            # Throttle concurrent jobs to `$MAX_JOBS` so we never starve CPU/RAM
             CURRENT_JOBS=`jobs -p | wc -l`
             while [ "$CURRENT_JOBS" -ge "$MAX_JOBS" ]; do
                 wait -n

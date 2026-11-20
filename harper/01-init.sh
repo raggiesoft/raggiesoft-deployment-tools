@@ -1,20 +1,26 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# HARPER MODULE 01: INITIALIZATION
+# HARPER MODULE 01: INITIALIZATION (`harper/01-init.sh`)
 # ==============================================================================
-# ARCHITECTURAL OVERVIEW:
-# This module is responsible for initializing the core state of the Harper 
-# media processing engine. It configures paths, handles command-line arguments,
-# performs hardware discovery (GPU and CPU concurrency), and locates external 
-# dependencies (7-Zip and Upscaler).
-#
-# FUTURE MAINTENANCE NOTES:
-# - Hardware detection is OS-specific and uses a heuristic regex for iGPUs.
-# - The worker pool limits are calculated based on logical CPU cores minus 2.
-# - If path structures change in `engine-room-records/artists`, update SEARCH_PATH.
+# PLAIN-ENGLISH OVERVIEW (100-LEVEL INTRO):
+#   Sourced first by `harper.sh`, this module prepares everything Harper needs
+#   before touching a single audio file:
+#     1. Defines numeric `ERRORLEVEL` constants (`0..3`) so callers know whether
+#        every track/archive succeeded or where an error occurred.
+#     2. Resolves paths to public CDN metadata (`raggiesoft-assets`) vs. private
+#        local master audio (`raggiesoft-vaults` — never uploaded to public CDN).
+#     3. Parses CLI flags (`--rebuild`, `--artist <slug>`, `--album <slug>`,
+#        `--metadata`, `--no-vtt`, `--force-igpu`).
+#     4. Inspects the computer's GPU and logical CPU cores to size the parallel
+#        FFmpeg worker pool (`MAX_JOBS = TOTAL_CORES - 2`) and guard low-power
+#        laptops with integrated GPUs from accidental multi-hour full rebuilds.
+#     5. Scans every `tracks.json` across all bands via an inline Python script
+#        to initialize our **Official US ISRC Agency (`QTAHP`)** counter and
+#        detect any unassigned sequence gaps (`00001..max`) for automatic backfill!
 # ==============================================================================
 
 # --- ERRORLEVEL / EXIT CODE CONTRACT ---
+# `readonly` makes these variables immutable constants (attempting to reassign them throws a Bash error):
 #   0 = ERR_SUCCESS                    (100% of audio renders, archives, and JSON catalogs succeeded)
 #   1 = ERR_FATAL_INIT                 (Missing modules, invalid CLI parameter, missing path, or iGPU lock)
 #   2 = ERR_AUDIO_TRANSCODE_FAILED     (One or more FFmpeg BWF stamps or multi-tier transcodes failed)
@@ -27,7 +33,11 @@ export HARPER_AUDIO_ERRORS=0
 export HARPER_ARCHIVE_ERRORS=0
 
 # --- PATH CONFIGURATION ---
-# Define the root path for artist records and metadata (resolved from ~/Developer/raggiesoft-deployment-tools)
+# Decoupled Storage Architecture:
+#   - `SEARCH_PATH` (`raggiesoft-assets/...`) holds public web MP3s (128k), JSON metadata,
+#     3000px cover art, and lyrics synced to DigitalOcean Spaces CDN (`assets.raggiesoft.com`).
+#   - `VAULTS_ROOT` (`raggiesoft-vaults/...`) holds private 24-bit/48kHz Master WAVs, lossless
+#     FLACs, V0 MP3s, Q9 OGGs, and `.7z` archives strictly on local drives!
 if [ -d "$ROOT_DIR/../raggiesoft-servers" ]; then
     export SERVER_ROOT="$ROOT_DIR/../raggiesoft-servers"
 else
@@ -37,7 +47,7 @@ SEARCH_PATH="$SERVER_ROOT/raggiesoft-assets/engine-room-records/artists"
 METADATA_FILE="$SERVER_ROOT/raggiesoft-assets/engine-room-records/artists/metadata.json"
 export VAULTS_ROOT="$SERVER_ROOT/raggiesoft-vaults/engine-room-records/artists"
 
-# Temporary indices used for fast writes during parallel processing
+# Temporary `.jsonl` (JSON Lines: one JSON object per line) scratch files used during the run
 TEMP_SEARCH_INDEX="temp_search_index.jsonl" 
 TEMP_CATALOG_INDEX="temp_catalog_index.jsonl" 
 export TEMP_GEMINI_VTT_QUEUE="$ROOT_DIR/temp_gemini_vtt_queue.txt"
@@ -45,17 +55,20 @@ export TEMP_GEMINI_VTT_QUEUE="$ROOT_DIR/temp_gemini_vtt_queue.txt"
 echo "   🎚️  Targeting Studio Archives: $SEARCH_PATH"
 echo "   🔐 Targeting Local Master Vaults: $VAULTS_ROOT"
 
-# Initialize Indices by truncating/creating them
+# BASH TRUNCATION IDIOM (`> "$FILENAME"`):
+# Using output redirection `>` with NO command on the left creates an empty 0-byte file
+# (or wipes any leftover text from an interrupted prior run) in a single syscall!
 > "$TEMP_SEARCH_INDEX" 
 > "$TEMP_CATALOG_INDEX"
 > "$TEMP_GEMINI_VTT_QUEUE"
 
 # --- ARGUMENT PARSING ---
-# Default execution flags
-# - REBUILD: Global or scoped rebuild mode triggered by `--rebuild` (or `-y`).
-# - TARGET_ARTIST: Optional artist directory slug (`--artist <artist-slug>`) to scope `--rebuild`
+# Default execution flags:
+# - `REBUILD`: Global or scoped rebuild mode triggered by `--rebuild` (or `-y`), or auto-enabled by `--artist`.
+# - `TARGET_ARTIST`: Optional artist directory slug (`--artist <artist-slug>`) to scope `--rebuild`
 #   to a single artist (or a single album when paired with `--album <album-slug>`).
-# - TARGET_ALBUM: Optional album directory slug (`--album <album-slug>`). Strictly requires `--artist`.
+# - `TARGET_ALBUM`: Optional album directory slug (`--album <album-slug>`). Strictly requires `--artist`.
+# - `ffmpeg_flag="-n"`: Tells `ffmpeg` "never overwrite existing output files" by default (`-y` overwrites).
 REBUILD=false
 FORCE_IGPU=false
 OVERWRITE=false
@@ -65,7 +78,9 @@ TARGET_ARTIST=""
 TARGET_ALBUM=""
 ffmpeg_flag="-n"
 
-# Process provided command-line arguments
+# `$#` is the count of remaining command-line arguments.
+# Each loop pass inspects `$1`; flags that take a value (`--artist <slug>`) read `$2` and call
+# `shift` an extra time so both the flag and its value are consumed!
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --rebuild|-y) 
@@ -75,6 +90,7 @@ while [[ "$#" -gt 0 ]]; do
             ffmpeg_flag="-y" 
             ;;
         --artist)
+            # Guard against missing value (`--artist` at end of command or followed immediately by another `--flag`)
             if [[ -z "${2:-}" || "${2:-}" == --* ]]; then
                 echo "🛑 HARPER FATAL ERROR: --artist requires an artist slug argument (e.g., --artist the-stardust-engine)."
                 exit "${ERR_FATAL_INIT:-1}"
@@ -99,14 +115,14 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 # --- SCOPED REBUILD VALIDATION (--artist & --album) ---
-# Rule 1: --album strictly requires --artist so Harper knows which artist vault/assets tree to target.
+# Rule 1: `--album` strictly requires `--artist` so Harper knows which artist vault/assets tree to target.
 if [ -n "$TARGET_ALBUM" ] && [ -z "$TARGET_ARTIST" ]; then
     echo "🛑 HARPER FATAL ERROR: --album ('$TARGET_ALBUM') requires --artist <artist-slug> to also be specified!"
     echo "   Usage: ./raggiesoft-deployment-tools/harper.sh --rebuild --artist <artist-slug> --album <album-slug>"
     exit "${ERR_FATAL_INIT:-1}"
 fi
 
-# Rule 2: If --artist (or --artist + --album) is passed, auto-enable REBUILD for that target scope
+# Rule 2: If `--artist` (or `--artist` + `--album`) is passed, auto-enable `REBUILD` for that target scope
 # and verify that the target artist/album directories physically exist on disk before starting.
 if [ -n "$TARGET_ARTIST" ]; then
     REBUILD=true
@@ -120,34 +136,31 @@ if [ -n "$TARGET_ARTIST" ]; then
     fi
 fi
 
-# --- PRE-FLIGHT HARDWARE CHECK (Cross-Platform) ---
-# Detect system GPU capabilities to avoid hanging the system during heavy loads
+# --- PRE-FLIGHT HARDWARE CHECK (Cross-Platform GPU Discovery) ---
+# Upscaling 4x cover art via Vulkan (`Real-ESRGAN`) stresses shared-memory integrated GPUs (iGPUs).
+# Detect the host GPU string using PowerShell WMI/CIM on Windows, `lspci` on Linux, or `sysctl` on macOS.
 IGPU_DETECTED=false
 GPU_INFO=""
 IGPU_SAFE_MODE=""
 
-# Gather GPU info based on the operating system environment
 if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
-    # Windows environment check
     GPU_INFO=$(powershell.exe -NoProfile -Command "(Get-CimInstance Win32_VideoController).Name" 2>/dev/null | tr -d '\r')
 elif command -v lspci &> /dev/null; then
-    # Linux environment check
     GPU_INFO=$(lspci | grep -iE 'vga|3d|display')
 elif [[ "$OSTYPE" == "darwin"* ]]; then
-    # macOS environment check
     GPU_INFO=$(sysctl -n machdep.cpu.brand_string | tr -d '\n')
 fi
 
-# The Heuristic Regex (Works against both Windows and Linux outputs)
-# Identifies common integrated graphics cards
+# `grep -qiE` runs a quiet (`-q`, exit code only), case-insensitive (`-i`), Extended Regex (`-E`) match
+# against common Intel UHD/Iris and AMD Vega/Renoir/Cezanne integrated graphics names (Apple M-series does NOT match).
 if echo "$GPU_INFO" | grep -qiE 'integrated|vega|renoir|cezanne|intel|uhd|iris|radeon.*graphics'; then
     IGPU_DETECTED=true
-    # Set safe mode flags for upscaling on weaker integrated graphics
+    # Smaller Vulkan tile size (`-t 32`) prevents VRAM exhaustion on shared-memory iGPUs
     IGPU_SAFE_MODE="-g 1 -t 32"
 fi
 
-# Prevent accidental complete full-library rebuilds on iGPUs due to performance constraints
-# (Scoped single-artist or single-album rebuilds via --artist / --album are permitted)
+# Safety Interlock: Prevent accidental unscoped full-library `--rebuild` on low-power iGPUs unless `--force-igpu` is passed.
+# (Scoped single-artist or single-album rebuilds via `--artist` / `--album` are always permitted!)
 if [ "$REBUILD" = true ] && [ -z "$TARGET_ARTIST" ] && [ "$IGPU_DETECTED" = true ] && [ "$FORCE_IGPU" = false ] && [ "$METADATA_ONLY" = false ]; then
     echo "🛑 HARPER FATAL ERROR: Integrated GPU (iGPU) Detected!"
     echo "===================================================================="
@@ -164,7 +177,6 @@ if [ "$REBUILD" = true ] && [ -z "$TARGET_ARTIST" ] && [ "$IGPU_DETECTED" = true
     exit 1
 fi
 
-# Acknowledge user override for iGPU constraint
 if [ "$REBUILD" = true ] && [ "$IGPU_DETECTED" = true ] && [ "$FORCE_IGPU" = true ] && [ "$METADATA_ONLY" = false ]; then
     echo "⚠️  HARPER WARNING: iGPU detected, but --force-igpu is active."
     echo "   Buckle up. This is going to take a while..."
@@ -173,7 +185,7 @@ fi
 # --- DYNAMIC HARDWARE DETECTION & WORKER POOL LIMITS ---
 echo "   🔍 HARPER: Scanning system hardware for multi-threading..."
 
-# Determine total logical cores available for multiprocessing
+# Query total logical CPU threads (`sysctl -n hw.ncpu` on macOS, `nproc` on Linux/Git Bash)
 if [[ "$OSTYPE" == "darwin"* ]]; then
     TOTAL_CORES=$(sysctl -n hw.ncpu)
 else
@@ -182,7 +194,9 @@ fi
 
 echo "   🎛️  System reports $TOTAL_CORES logical CPU cores."
 
-# Allocate concurrent jobs dynamically, reserving 2 cores for system stability
+# BASH ARITHMETIC (`(( ... ))` and `$(( ... ))`):
+# Double parentheses evaluate C-style integer math! Reserving 2 CPU cores keeps the OS UI
+# and disk I/O responsive while `$MAX_JOBS` background `ffmpeg` workers encode tracks in parallel.
 if (( TOTAL_CORES > 4 )); then
     MAX_JOBS=$(( TOTAL_CORES - 2 ))
 else
@@ -192,18 +206,16 @@ fi
 echo "   🎚️  HARPER: Concurrency limit dynamically set to $MAX_JOBS simultaneous audio jobs."
 
 # --- LOCATE 7-ZIP BINARY ---
-# Attempt to find the local or system 7-Zip executable for archiving operations
+# Used by `05-archiver.sh` to build `.zip` (`-tzip`) and solid `.7z` (`-t7z -mx=9 -ms=on`) bundles.
 SEVEN_ZIP_LOCAL="$ROOT_DIR/build-tools/7zip"
 USE_SEVEN_ZIP=false
 
 if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
-     # Windows local executable
      if [ -f "$SEVEN_ZIP_LOCAL/7za.exe" ]; then
          SEVEN_ZIP_CMD="$SEVEN_ZIP_LOCAL/7za.exe"
          USE_SEVEN_ZIP=true
      fi
 else
-    # Linux/Mac check system PATH first, then fallback to local binaries
     if command -v 7zz &> /dev/null; then
         SEVEN_ZIP_CMD="7zz"
         USE_SEVEN_ZIP=true
@@ -220,8 +232,7 @@ else
     echo "   ⚠️  HARPER: I can't find 7-Zip! I'll skip the zip files for now."
 fi
 
-# --- LOCATE UPSCALER BINARY ---
-# Locate Real-ESRGAN executables depending on the host OS
+# --- LOCATE UPSCALER BINARY (`Real-ESRGAN` NCNN Vulkan) ---
 UPSCALER_BASE="$ROOT_DIR/build-tools/realesrgan"
 USE_UPSCALER=false
 
@@ -244,7 +255,6 @@ elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
     fi
 fi
 
-# Apply safe mode scaling restrictions if iGPU is detected
 if [ "$USE_UPSCALER" = true ]; then
     if [ "$IGPU_DETECTED" = true ]; then
         echo "   ⚠️  HARPER: Upscaler engaging iGPU Safe Mode (Throttled Tile Size) for $GPU_INFO"
@@ -256,7 +266,6 @@ else
 fi
 
 # --- OVERWRITE & METADATA STATUS LOGS ---
-# Log configuration parameters that guide downstream operations
 if [ "$REBUILD" = true ]; then
     if [ "$METADATA_ONLY" = true ]; then
         echo "   ⚡ HARPER: Rebuild Metadata flag detected! Overwriting JSON & Markdown only."
@@ -269,19 +278,29 @@ if [ "$REBUILD" = true ]; then
     fi
 fi
 
-# Validate target path existence before progressing to actual processing loops
 if [ ! -d "$SEARCH_PATH" ]; then
     echo "   ❌ HARPER: Whoops! Directory not found at $SEARCH_PATH"
     exit 1
 fi
 
 # --- OFFICIAL US ISRC AGENCY REGISTRANT INITIALIZATION (PREFIX: QTAHP) ---
-# Registrant Name: Michael Ragsdale | Registrant ID: 185611
-# Contact: dsp.operations@engineroom-records.com | Prefix Allocated: 2026-10-20
-# Ledger Discipline: Scans all tracks.json files to determine both the highest
-# allocated sequential designation ($TEMP_ISRC_COUNTER_FILE) and any unassigned
-# sequential gaps between 00001 and max_seq ($TEMP_ISRC_GAPS_FILE) so that
-# 04-track-processor.sh automatically backfills gaps before incrementing max_seq.
+# WHAT AN ISRC IS (100-LEVEL AUDIO INDUSTRY INTRO):
+#   An **ISRC** (International Standard Recording Code) is a permanent 12-character
+#   global fingerprint for a specific sound recording (like an ISBN for a single song!):
+#     Format: `CC` (`US` -> `QT`) + `XXX` (`AHP` = Michael Ragsdale, Registrant ID `185611`)
+#             + `YY` (2-digit year, e.g. `26`) + `NNNNN` (5-digit sequential number `00001..99999`).
+#   Example: `QTAHP2600042`.
+#
+# HOW THIS INLINE PYTHON LEDGER SCANNER WORKS:
+#   Before processing any album, Python reads every `tracks.json` across the entire
+#   discography and writes 3 temporary state files for `04-track-processor.sh`:
+#     1. `$TEMP_ISRC_COUNTER_FILE` : Highest `NNNNN` integer allocated so far this year.
+#     2. `$TEMP_ISRC_GAPS_FILE`    : Any unused numbers between `1..max_seq` so newly
+#                                    mastered songs backfill gaps before incrementing `max_seq`!
+#     3. `$TEMP_WAV_ISRC_MAP`      : Maps `artist|masterWavPath -> existing ISRC` so if
+#                                    a compilation or Greatest Hits album reuses the exact
+#                                    same `masterWavPath`, it inherits the SAME ISRC
+#                                    (obeying the US ISRC Single-Code-Per-Recording rule!).
 export ISRC_REGISTRANT_PREFIX="QTAHP"
 export ISRC_YEAR_SUFFIX=$(date +"%y")
 export TEMP_ISRC_COUNTER_FILE="$ROOT_DIR/temp_isrc_counter.txt"
@@ -334,6 +353,7 @@ with open(map_file, "w", encoding="utf-8") as f:
         f.write(f"{k}\t{v}\n")
 PYEOF
 
+# `printf '%05d' "$NUM"` formats an integer as a 5-digit zero-padded string (e.g., `42` -> `00042`).
 INITIAL_ISRC_MAX=$(cat "$TEMP_ISRC_COUNTER_FILE" 2>/dev/null || echo "0")
 INITIAL_GAP_COUNT=$(grep -c '^[0-9]' "$TEMP_ISRC_GAPS_FILE" 2>/dev/null | tr -d '[:space:]')
 INITIAL_GAP_COUNT=${INITIAL_GAP_COUNT:-0}

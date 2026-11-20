@@ -3,13 +3,26 @@
 ================================================================================
 ARCHITECTURAL BLOCK COMMENT: stamp-crossroads-cover.py
 ================================================================================
-Purpose:
-    Official cover-stamping utility for interactive RaggieSoft Story Crossroads
-    novels. Composites the circular Concept 3 Story Crossroads Imprint Seal
-    (`story-crossroads-seal-2way.png` or `story-crossroads-seal-3way.png`,
-    styled as a sibling crest to Ocean View Archives) onto generated book covers:
-      1. 2:3 Portrait Covers (`raggiesoft-books/images/covers/2x3/<slug>.jpg`)
-      2. 16:9 OpenGraph Widescreen Covers (`raggiesoft-books/images/covers/og/<slug>.jpg`)
+PLAIN-ENGLISH OVERVIEW (100-LEVEL INTRO):
+    Interactive branching novels in our library are published under the
+    **RaggieSoft Story Crossroads** imprint. To help readers immediately spot an
+    interactive branching novel on the bookshelf, this Python script uses the
+    **Pillow (`PIL`)** image-processing library to stamp a crisp circular Story
+    Crossroads medallion (complete with a soft drop-shadow halo) onto both the
+    vertical `2:3` book cover and the horizontal `16:9` social-sharing cover!
+
+WHEN IT RUNS:
+    Manually (`./raggiesoft-deployment-tools/stamp-crossroads-cover.py --book <slug>`)
+    right after generating raw cover artwork for any Story Crossroads interactive novel.
+
+INPUTS & OUTPUTS:
+    - Reads:
+        * Seal PNGs: `raggiesoft-assets/raggiesoft-books/images/logos/story-crossroads-seal-{2,3}way.png`
+        * Branching Manifest: `raggiesoft-narratives/books/<slug>/crossroads.json` (or `ovab.json`)
+        * Base Cover Artwork: `raggiesoft-books/images/covers/{2x3,og}/<slug>.jpg` (or `--input`)
+    - Writes:
+        * Stamped JPEG/PNG cover files with pixel-accurate safe-zone margins and
+          Gaussian-blurred alpha drop shadows.
 
 Design Decisions & Layout Geometry:
     - 2-Directional vs. 3-Directional Variant Selection:
@@ -18,8 +31,8 @@ Design Decisions & Layout Geometry:
       * `--directions 3` stamps `story-crossroads-seal-3way.png` (for multi-path
         Crossroads novels offering 3+ choices).
       * When `--book <slug>` is used without `--directions`, the script inspects
-        `raggiesoft-narratives/books/<slug>/ovab.json` (`crossroads` array) and
-        automatically selects `3` if any Crossroads has 3+ options, else `2`.
+        `crossroads.json` (`ovab.json` fallback) and automatically selects `3`
+        if any Crossroads has 3+ options, else `2`.
     - Aspect-Aware Safe-Zone Placement (`--position auto`):
       * Portrait (`2:3`, `h > w`): Places the medallion (`16.5%` of cover width)
         in the lower-right safe zone (`4.2%` from right edge, `8.8%` from bottom
@@ -43,6 +56,7 @@ Usage Examples:
 ================================================================================
 """
 
+# Standard-library imports + Pillow (`PIL`: Python Imaging Library fork)
 import argparse
 import json
 import os
@@ -50,7 +64,8 @@ import sys
 from PIL import Image, ImageFilter
 
 
-# Resolve canonical workspace directories relative to `raggiesoft-deployment-tools/`
+# Resolve canonical workspace directories relative to `raggiesoft-deployment-tools/`:
+# `__file__` is this script's path; `dirname` steps up one folder at a time.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKSPACE_ROOT = os.path.dirname(SCRIPT_DIR)
 ASSETS_BOOKS_DIR = os.path.join(
@@ -81,6 +96,7 @@ def detect_book_directions(book_slug: str) -> int:
             if isinstance(crossroads_list, list):
                 for cx in crossroads_list:
                     options = cx.get("options", []) if isinstance(cx, dict) else []
+                    # As soon as we see any Crossroads offering 3+ routes, return the 3-way signpost crest
                     if isinstance(options, list) and len(options) >= 3:
                         return 3
         except Exception:
@@ -101,6 +117,11 @@ def load_cropped_seal(directions: int) -> Image.Image:
     if not os.path.isfile(seal_path):
         raise FileNotFoundError(f"Missing Story Crossroads seal asset: {seal_path}")
 
+    # HOW PILLOW `RGBA` & `.getbbox()` WORK:
+    #   - `.convert("RGBA")` ensures every pixel has 4 channels: Red, Green, Blue,
+    #     and **Alpha** (`0` = completely invisible/transparent, `255` = solid opaque).
+    #   - `.getbbox()` finds the tight `(left, top, right, bottom)` rectangle enclosing
+    #     all non-transparent pixels (`Alpha > 0`), stripping invisible outer margin!
     seal_rgba = Image.open(seal_path).convert("RGBA")
     bbox = seal_rgba.getbbox()
     return seal_rgba.crop(bbox) if bbox else seal_rgba
@@ -118,11 +139,13 @@ def stamp_cover_image(
     Composites the Story Crossroads circular seal onto `input_path` and writes
     the stamped result to `output_path`. Returns `(width, height, stamp_diameter)`.
     """
+    # Convert JPEG cover to `RGBA` in memory so we can alpha-blend transparent layers onto it.
+    # Pillow image coordinates start at `(0, 0)` in the **TOP-LEFT** corner (`+x` goes right, `+y` goes down).
     base = Image.open(input_path).convert("RGBA")
     width, height = base.size
     is_portrait = height > width
 
-    # Compute target medallion diameter proportional to cover dimensions
+    # Compute target medallion diameter proportional to cover dimensions (enforcing >= 48px floor)
     if scale_override > 0.0:
         diam = int(round(min(width, height) * scale_override))
     elif is_portrait:
@@ -132,7 +155,9 @@ def stamp_cover_image(
 
     diam = max(48, diam)
 
-    # Resolve target (x, y) top-left coordinates based on cover aspect & position
+    # Resolve target `(x, y)` top-left coordinates for the stamp:
+    # Because `(0, 0)` is top-left, placing an object of size `diam` near the right/bottom edge
+    # is calculated as `width - diam - margin_x` and `height - diam - margin_y`.
     margin_x = int(round(width * (0.042 if is_portrait else 0.028)))
     margin_y_std = int(round(height * (0.036 if is_portrait else 0.042)))
     margin_y_above_author = int(round(height * 0.088))
@@ -158,10 +183,19 @@ def stamp_cover_image(
     else:
         raise ValueError(f"Unsupported --position value: {position}")
 
-    # Resize medallion with high-quality Lanczos downsampling
+    # Resize medallion using `LANCZOS`—the highest-quality mathematical resampling filter
+    # for shrinking crisp line art and typography without jagged pixel stair-stepping ("aliasing").
     stamp = seal_img.resize((diam, diam), Image.Resampling.LANCZOS)
 
-    # Build a soft Gaussian drop shadow from the medallion's alpha channel
+    # HOW THE GAUSSIAN DROP SHADOW IS BUILT IN 5 STEPS:
+    #   1. Create an empty transparent `RGBA` canvas slightly larger (`+ pad * 2`) than the seal
+    #      so the blurred shadow glow has room to spread outward without clipping at the edges.
+    #   2. `stamp.split()[3]` extracts channel index `3` (the **Alpha** mask of the circular seal).
+    #   3. Create a semi-transparent black square (`(0, 0, 0, 165)`) and paste it through `alpha_mask`
+    #      so only the exact silhouette of the seal becomes dark shadow.
+    #   4. Apply `ImageFilter.GaussianBlur` to soften that sharp dark silhouette into a smooth halo.
+    #   5. `.alpha_composite(...)` layers first the shadow (nudged down slightly by `shadow_offset_y`
+    #      to simulate overhead gallery lighting) and then the crisp `stamp` right on top!
     pad = max(8, int(round(diam * 0.12)))
     shadow = Image.new("RGBA", (diam + pad * 2, diam + pad * 2), (0, 0, 0, 0))
     alpha_mask = stamp.split()[3]
@@ -174,6 +208,9 @@ def stamp_cover_image(
     base.alpha_composite(shadow, (x - pad, y - pad + shadow_offset_y))
     base.alpha_composite(stamp, (x, y))
 
+    # Ensure parent output directory exists (`exist_ok=True` is Python's `mkdir -p`).
+    # Note: JPEG files do NOT support an Alpha channel (`RGBA`), so we flatten back to
+    # 3-channel `RGB` (`base.convert("RGB")`) before saving `.jpg`!
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     ext = os.path.splitext(output_path)[1].lower()
     if ext == ".png":
@@ -185,6 +222,7 @@ def stamp_cover_image(
 
 
 def main() -> int:
+    # `argparse.ArgumentParser` builds a self-documenting CLI (`--help`, type checks, allowed `choices`)
     parser = argparse.ArgumentParser(
         description="Stamp the RaggieSoft Story Crossroads Imprint Seal onto 2:3 and 16:9 OG book covers."
     )
@@ -232,6 +270,7 @@ def main() -> int:
     if not args.book and not args.input:
         parser.error("Provide either --book <slug> or --input <image_path>.")
 
+    # Mode A: `--book <slug>` automatically stamps BOTH `2x3/<slug>.jpg` and `og/<slug>.jpg` in-place
     if args.book:
         directions = args.directions or detect_book_directions(args.book)
         seal_img = load_cropped_seal(directions)
@@ -253,6 +292,7 @@ def main() -> int:
                 print(f"[SKIP] {label} not found at {path}", file=sys.stderr)
         return 0 if stamped_any else 1
 
+    # Mode B: `--input <path>` (and optional `--output <path>`) stamps a single arbitrary image file
     directions = args.directions or 2
     seal_img = load_cropped_seal(directions)
     out_path = args.output or args.input
@@ -266,4 +306,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # Pass `main()`'s integer return value (`0` = OK, `1` = error) to the OS shell via `sys.exit(...)`
     sys.exit(main())

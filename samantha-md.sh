@@ -1,40 +1,40 @@
 #!/bin/bash
 # ==============================================================================
-# SAMANTHA: THE NARRATIVE COMPILER
+# SAMANTHA: THE NARRATIVE COMPILER (`samantha-md.sh`)
 # ==============================================================================
-# ARCHITECTURAL OVERVIEW:
-# Samantha parses standard Markdown manuscript folders and dynamically stitches
-# them into web-ready JSON indices, compiling the structured data needed by the
-# frontend React client ("Katie") to render books. She also moves raw lore markdown
-# files to the public deployment folders.
+# PLAIN-ENGLISH OVERVIEW (100-LEVEL INTRO):
+#   Companion to `samantha-docx.sh`! Once `samantha-docx.sh` shatters a legacy
+#   Word document into numbered Markdown files (`books/<slug>/manuscript/001-*.md`),
+#   `samantha-md.sh` concatenates those numbered Markdown chunks in sorted order
+#   (`cat $SOURCE_FILES`), slices them by `#` / `##` / `###` heading depth via
+#   `awk` into `raggiesoft-narratives/books/<slug>/eXXX/cXXX/sXXX.md`, and rolls
+#   up `katie.json` via `jq`—skipping unchanged books instantly using a `find -newer`
+#   timestamp cache check!
+#   (Note: Modern Ocean View Archives novels authored directly as `eXXX/cXXX/pXXX.md`
+#   inside `raggiesoft-narratives/books/` are compiled directly by `paige.php`.)
 #
-# FUTURE MAINTENANCE NOTES:
-# - Relies on `awk` state management to parse hierarchical markdown headers 
-#   (Book -> Chapter -> Part). If the manuscript format changes, the awk regex must be updated.
-# - Employs a cache shield mechanism: it skips processing if the source files are older
-#   than the generated `katie.json` manifest.
+# INPUTS & OUTPUTS:
+#   - Reads: `books/<slug>/<slug>-lore.md` and `books/<slug>/manuscript/[0-9][0-9][0-9]-*.md`
+#   - Writes: `raggiesoft-narratives/lore/<slug>/` and `raggiesoft-narratives/books/<slug>/`
 # ==============================================================================
 
 echo "👱‍♀️ Samantha: Taking the podium. Native Modular Routing initialized!"
 
-# Validate execution context
+# Validate that `books/` exists in the current working directory
 if [[ ! -d "books" ]]; then
     echo "   *Whistle blow!* I can't find the 'books' directory."
     exit 1
 fi
 
-# Iterate over all nested book directories
+# Iterate over all nested book directories (`books/*/`)
 for DIR in books/*/; do
-    # Extract the base folder name to use as an identifier
     BASE=$(basename "$DIR")
     
     # LOCAL SOURCES
-    # Define paths to source files within the workspace
     LORE_MD="books/$BASE/$BASE-lore.md"
     MANUSCRIPT_DIR="books/$BASE/manuscript"
     
-    # PUBLIC DEPLOYMENT FOLDERS
-    # Target directories where the compiled artifacts will be written (resolved from ~/Developer/raggiesoft-deployment-tools)
+    # PUBLIC DEPLOYMENT FOLDERS (resolved relative to `raggiesoft-deployment-tools/`)
     if [[ -d "../raggiesoft-servers" ]]; then
         SERVER_ROOT="../raggiesoft-servers"
     else
@@ -49,14 +49,12 @@ for DIR in books/*/; do
     OUT_NARRATIVE_DIR="$NARRATIVES_ROOT/books/$BASE"
 
     # -----------------------------------------
-    # PROCESS LORE
+    # 1. PROCESS LORE (`cmp -s` Byte-Identical Skip)
     # -----------------------------------------
     if [[ -f "$LORE_MD" ]]; then
-        # Ensure the destination directory exists
         mkdir -p "$OUT_LORE_DIR"
         FINAL_WEB_LORE="$OUT_LORE_DIR/${BASE}-lore.md"
         
-        # Performance check: Only copy if the source differs from the destination
         if [[ -f "$FINAL_WEB_LORE" ]] && cmp -s "$LORE_MD" "$FINAL_WEB_LORE"; then
             echo "   🛡️ [SKIP] No tempo changes in '$BASE' lore."
         else
@@ -66,19 +64,19 @@ for DIR in books/*/; do
     fi
 
     # -----------------------------------------
-    # PROCESS NARRATIVE (The Stitch & Slice)
+    # 2. PROCESS NARRATIVE ("The Stitch & Slice")
     # -----------------------------------------
     if [[ -d "$MANUSCRIPT_DIR" ]]; then
-        # Gather all chunked files in strict alphabetical/numeric order
-        # Expecting format like: 001-intro.md, 002-chapter-one.md
+        # Gather 3-digit-prefixed files (`001-book-one.md`, `002-book-two.md`) in sorted numeric order
         SOURCE_FILES=$(find "$MANUSCRIPT_DIR" -maxdepth 1 -name "[0-9][0-9][0-9]-*.md" | sort)
         
         if [[ -n "$SOURCE_FILES" ]]; then
             MANIFEST="$OUT_NARRATIVE_DIR/katie.json"
             NEEDS_UPDATE=false
             
-            # THE EFFICIENCY SHIELD
-            # Skip expensive regex parsing if the destination JSON is newer than all source chunks
+            # THE EFFICIENCY SHIELD (`find ... -newer "$MANIFEST"`):
+            # Much like `make` in C/C++, `find -newer` asks the filesystem if ANY `.md` chunk
+            # was modified after `katie.json` was last built. If none are newer, skip in <2ms!
             if [[ ! -f "$MANIFEST" ]]; then
                 NEEDS_UPDATE=true
             else
@@ -93,17 +91,18 @@ for DIR in books/*/; do
             else
                 echo "   Found updated manuscript chunks for '$BASE'. Stitching and Slicing..."
                 
-                # Setup destination structure
                 mkdir -p "$OUT_NARRATIVE_DIR"
-                # Clean the output directory to prevent orphaned files, keeping the directory itself
+                # Remove old generated era folders inside `$OUT_NARRATIVE_DIR` while keeping the root directory
                 find "$OUT_NARRATIVE_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
                 
-                # Prepare temporary JSON lines file for the intermediate index
                 TEMP_JSONL="$OUT_NARRATIVE_DIR/temp_index.jsonl"
                 > "$TEMP_JSONL"
 
-                # Use cat to stream all files seamlessly into AWK
-                # The awk script parses markdown headers to build directory hierarchies and index JSON
+                # Stream all sorted `001-*.md` chunks seamlessly via `cat ... | awk` so `awk` sees one unified stream:
+                #   - `# Title`   -> Era `e001/`
+                #   - `## Title`  -> Chapter `e001/c001/`
+                #   - `### Title` -> Scene `e001/c001/s001.md` + `.jsonl` index entry
+                #   - `#### Sub`  -> Promoted to `## Sub` inside the scene Markdown
                 cat $SOURCE_FILES | LC_ALL=C awk -v base_dir="$OUT_NARRATIVE_DIR" -v json_log="$TEMP_JSONL" '
                 
                 # Sanitizes string values for JSON inclusion
@@ -195,7 +194,7 @@ for DIR in books/*/; do
 
                 echo "   Subdivisions complete. Passing the baton to Katie..."
 
-                # Transform the flat JSON Lines index into a nested JSON structure grouping by Book -> Chapter
+                # Slurp (`jq -s`) the flat `.jsonl` rows and `group_by` Book -> Chapter -> Parts into `katie.json`
                 jq -s '
                   group_by(.book_num) | map({
                     book_num: .[0].book_num,
@@ -214,7 +213,6 @@ for DIR in books/*/; do
                   })
                 ' "$TEMP_JSONL" > "$OUT_NARRATIVE_DIR/katie.json"
 
-                # Cleanup the intermediate index file
                 rm -f "$TEMP_JSONL"
 
                 echo "   Katie's manifest locked for '$BASE'."

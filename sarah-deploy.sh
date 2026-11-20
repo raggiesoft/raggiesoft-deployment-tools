@@ -2,22 +2,36 @@
 # ==============================================================================
 # SARAH: AUTONOMOUS DEPLOYMENT (v5.0 - Multi-Site Edition)
 # ==============================================================================
-# ARCHITECTURAL OVERVIEW:
-# Sarah serves as a lightweight, cron-friendly continuous deployment orchestrator.
-# She monitors a predefined list of Git repositories, pulls latest changes, and 
-# rsyncs them to standard `/var/www/` web roots. She ensures correct file permissions 
-# on the destination directories.
+# PLAIN-ENGLISH OVERVIEW (100-LEVEL INTRO):
+#   In our two-person deployment relay, **Jenna** (`jenna-sync.sh`) runs on your
+#   local Mac/PC to compile websites and push commits to GitHub, while **Sarah**
+#   (`sarah-deploy.sh`) lives on our Ubuntu production server (`jessica.raggiesoft.com`,
+#   DigitalOcean NYC1 `142.93.244.239`)!
 #
-# FUTURE MAINTENANCE NOTES:
-# - Ensure `deploy_site` handles any newly added sites.
-# - RSync excludes `.git`, `.gitignore`, and `README.md` by default. If specific
-#   sites need additional excludes, the deploy function signature will need to be updated.
-# - DO NOT run this script as root, to prevent security escalation risks via RSync.
+# WHEN IT RUNS:
+#   1. Automatically every 5 minutes via Linux `systemd` (`sarah.timer` -> `sarah.service`),
+#      acting like a modern self-logging `cron` job.
+#   2. Instantly within ~2 seconds whenever `jenna-sync.sh --push` wakes Sarah up
+#      over SSH (`ssh michael@jessica.raggiesoft.com '/home/michael/sarah-deploy.sh'`).
+#   3. Manually on the server (`./sarah-deploy.sh --force-reset`) for a clean reset.
+#
+# WHAT SHE READS & DEPLOYS:
+#   - Step 0 (Self-Upgrading Infra): Pulls `raggiesoft-deployment-tools` (re-launching
+#     herself immediately via `exec` if her own code changed!) and `nginx-config`
+#     (atomically validating `nginx -t` with automatic rollback before reloading Nginx!).
+#   - Steps 1–11 (All 11 Live Showrooms): Compares `LOCAL` vs `REMOTE` Git commit
+#     hashes across all 11 site repos in `/home/michael/raggiesoft-*`. If unchanged,
+#     skips in milliseconds! If updated, resets to `origin/main`, `rsync`s the static/PHP
+#     payload into `/var/www/<domain>`, normalizes `755`/`644` permissions, and pings
+#     **IndexNow** (`api.indexnow.org`) so Bing/DuckDuckGo/Yandex crawl instantly!
 # ==============================================================================
 # "I check for updates every 5 minutes. If Jenna pushed code, I deploy it instantly."
-# NO SUDO REQUIRED.
+# NO SUDO REQUIRED FOR WEB FILES.
 
-# ZERO-INTERACTIVE / AUTOMATIC "YES" ENVIRONMENT ENFORCEMENT
+# ZERO-INTERACTIVE / AUTOMATIC "YES" ENVIRONMENT ENFORCEMENT:
+# Because Sarah runs unattended in the background (`systemd` / `cron` / non-TTY SSH) with
+# nobody at a keyboard, ANY interactive prompt (`[Y/n]`, `vim` editor, SSH host-key question,
+# or `less` pager) would hang the server job forever! Exporting these variables disables all prompts:
 export CI=true
 export npm_config_yes=true
 export npm_config_fund=false
@@ -37,45 +51,53 @@ export GIT_PAGER=cat
 export PAGER=cat
 export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
 
-# SECURITY CHECK: SARAH REFUSES TO RUN AS ROOT
-# Prevent deployment script from accidentally modifying system files or creating root-owned web assets
+# SECURITY CHECK: SARAH REFUSES TO RUN AS ROOT (`$EUID -eq 0`)
+# HOW `$EUID` WORKS IN UNIX/LINUX:
+#   Every Linux user has a numeric ID (`UID`). Normal users get numbers like `1000` (`michael`),
+#   whereas the all-powerful superuser `root` (or anyone running `sudo ./sarah-deploy.sh`)
+#    ALWAYS has Effective User ID `EUID = 0`!
+#   If Sarah ran as `root`, `git` and `rsync` would create `root:root` files inside
+#   `/home/michael/` and `/var/www/`, locking out future non-root runs and increasing attack surface!
 if [ "$EUID" -eq 0 ]; then
     echo "🚨 SARAH FATAL ERROR: I am not allowed to run as root or via sudo!"
     echo "I was designed to run autonomously as the standard user. Please drop your privileges and try again."
     exit 1
 fi
 
-# Preserve original CLI arguments so Sarah can re-exec cleanly if she pulls an
-# updated version of herself from GitHub during Step 0.
+# Save original CLI flags (`"$@"`) into a Bash array so if Sarah pulls an updated version
+# of `sarah-deploy.sh` during Step 0, `exec` can pass the exact same flags (`--force-reset`) along!
 SARAH_ORIG_ARGS=("$@")
 
-# Self-healing symlink check: ensure `/home/michael/sarah-deploy.sh` (invoked by
-# `sarah.service` / `sarah.timer`) always points to the Git-tracked script in
-# `/home/michael/raggiesoft-deployment-tools/sarah-deploy.sh`.
+# Self-healing symlink (`-L` tests if a path is a symbolic link):
+# Ensures `/home/michael/sarah-deploy.sh` (targeted by `sarah.service`) always points to
+# the Git-tracked script in `/home/michael/raggiesoft-deployment-tools/sarah-deploy.sh`.
 if [ -f "/home/michael/raggiesoft-deployment-tools/sarah-deploy.sh" ] && [ ! -L "/home/michael/sarah-deploy.sh" ]; then
     ln -sf "/home/michael/raggiesoft-deployment-tools/sarah-deploy.sh" "/home/michael/sarah-deploy.sh" 2>/dev/null || true
 fi
 
 FORCE_RESET=false
 
-# Check for the nuclear override flag
-# This flag bypasses hash comparisons and forces a hard Git reset and clean sync
+# Optional `--force-reset` flag bypasses Git SHA comparisons and forces `git clean -fdx` + full `rsync`
 if [ "$1" == "--force-reset" ]; then
     FORCE_RESET=true
     echo "🚨 SARAH: NUCLEAR OVERRIDE INITIATED. Forcing a clean deployment..."
 fi
 
-# Official RaggieSoft IndexNow API Key (hosted at /<INDEXNOW_KEY>.txt on every domain)
+# Official RaggieSoft IndexNow API Key (hosted at `/<INDEXNOW_KEY>.txt` on every domain)
 readonly INDEXNOW_KEY="726167676965736f6674696e6465786e"
 
 # ==============================================================================
 # Helper: notify_indexnow_for_webroot <web_root>
 # ==============================================================================
-# Reads `<loc>` entries from `$WEB_ROOT/sitemaps/*.xml` (if split sitemaps exist)
-# or `$WEB_ROOT/sitemap.xml` right after `rsync` finishes populating `/var/www/*`,
-# verifies that `$WEB_ROOT/$INDEXNOW_KEY.txt` is present on disk, and submits up
-# to 10,000 canonical URLs to `https://api.indexnow.org/indexnow` (Bing, Yandex,
-# DuckDuckGo, Naver, Seznam, Yep) with a hard 8-second timeout so cron never blocks.
+# WHAT INDEXNOW IS:
+#   Instead of waiting days for search engines to randomly re-crawl our sites,
+#   **IndexNow** (`api.indexnow.org`) is an open instant-indexing protocol shared
+#   by Bing, DuckDuckGo, Yandex, Naver, Seznam, and Yep.
+#   Right after `rsync` updates `/var/www/<site>`, an inline Python XML parser
+#   extracts up to 10,000 `<loc>` URLs from `sitemaps/*.xml` or `sitemap.xml`,
+#   formats the JSON payload, and `curl` POSTs it with a strict `--max-time 8`
+#   8-second timeout (`-w "%{http_code}"` prints HTTP `200`/`202` while `-o /dev/null`
+#   discards body noise, and `|| echo "000"` ensures network hiccups NEVER fail cron!).
 function notify_indexnow_for_webroot() {
     local WEB_ROOT="$1"
     if [ ! -f "$WEB_ROOT/${INDEXNOW_KEY}.txt" ]; then
@@ -138,23 +160,27 @@ PYEOF
     fi
 }
 
-# Sarah's deployment brain
+# ==============================================================================
+# Helper: deploy_site <site_name> <repo_dir> <web_root> [sync_dir]
+# ==============================================================================
+# Sarah's core per-website deployment state machine:
+#   - `$1` (`SITE_NAME`): Human-readable label for logs (e.g., `"Music"`).
+#   - `$2` (`REPO_DIR`) : Local Git clone path (`/home/michael/raggiesoft-music`).
+#   - `$3` (`WEB_ROOT`) : Live Nginx document root (`/var/www/music.raggiesoft.com`).
+#   - `$4` (`SYNC_DIR`) : Optional compiled output subfolder (`/home/michael/raggiesoft-music/build`);
+#                         `${4:-$REPO_DIR}` defaults to `$REPO_DIR` for PHP sites that deploy from root!
 function deploy_site() {
-    # Function arguments mapping
     local SITE_NAME=$1
     local REPO_DIR=$2
     local WEB_ROOT=$3
-    # If SYNC_DIR is not provided, default to the repository root
     local SYNC_DIR=${4:-$REPO_DIR}
 
     local JUST_CLONED=false
-    # Ensure repository exists locally before attempting sync
+    # Self-healing clone: if a brand-new site repository hasn't been cloned on the server yet, clone it automatically!
     if [ ! -d "$REPO_DIR" ]; then
         echo "⚠️ SARAH: Repository missing at $REPO_DIR. Cloning from GitHub..."
-        # Extract repo name from REPO_DIR (e.g. raggiesoft-lore)
         local REPO_BASENAME=$(basename "$REPO_DIR")
         cd "$(dirname "$REPO_DIR")" || return
-        # Attempt to dynamically clone the repository based on expected naming conventions
         git clone "https://github.com/raggiesoft/$REPO_BASENAME.git"
         if [ ! -d "$REPO_DIR" ]; then
             echo "🚨 SARAH: Clone failed for $SITE_NAME."
@@ -163,9 +189,10 @@ function deploy_site() {
         JUST_CLONED=true
     fi
 
-    # Detect whether the target /var/www showroom directory is missing or empty
-    # (for example, right after install-subdomains.sh provisions a brand-new site)
-    # so Sarah hydrates it even when LOCAL == REMOTE!
+    # Empty Showroom Check (`ls -A` lists all entries except `.` and `..`):
+    # Right after `install-subdomains.sh` or `sync_nginx_vhosts` creates a brand-new empty
+    # `/var/www/<site>` folder, `LOCAL == REMOTE` might already be true in Git—checking
+    # `WEB_ROOT_EMPTY` ensures Sarah populates the empty `/var/www/<site>` folder anyway!
     local WEB_ROOT_EMPTY=false
     if [ ! -d "$WEB_ROOT" ] || [ -z "$(ls -A "$WEB_ROOT" 2>/dev/null)" ]; then
         WEB_ROOT_EMPTY=true
@@ -173,17 +200,16 @@ function deploy_site() {
 
     cd "$REPO_DIR" || return
 
-    # Fetch the latest info from GitHub without modifying working tree
+    # `git fetch origin main` downloads commit metadata from GitHub into `.git/` WITHOUT touching working files yet.
     git fetch origin main
 
-    # Compare local and remote HEAD SHAs to determine if sync is needed
+    # `git rev-parse` resolves a branch/pointer into its exact 40-character SHA-1 commit hash!
     LOCAL=$(git rev-parse HEAD)
     REMOTE=$(git rev-parse origin/main)
 
-    # Standard intelligence check
+    # Fast-path skip: if local commit == GitHub commit AND `/var/www/` isn't empty AND not `--force-reset`, return in <5ms!
     if [ "$FORCE_RESET" = false ] && [ "$JUST_CLONED" = false ] && [ "$WEB_ROOT_EMPTY" = false ]; then
         if [ "$LOCAL" == "$REMOTE" ]; then
-            # No changes detected and web root is already populated; quietly exit
             return
         fi
         echo "👩‍💼 SARAH: Change detected in $SITE_NAME! Jenna pushed updates."
@@ -193,21 +219,17 @@ function deploy_site() {
         echo "👩‍💼 SARAH: Bypassing version check for $SITE_NAME. Purging local repository cache."
     fi
 
-    # PULL UPDATES
-    # Hard reset aligns the local cache perfectly with remote, discarding local edits
+    # Align local working tree 100% with `origin/main` (`git clean -fdx` also wipes untracked files during `--force-reset`)
     git reset --hard origin/main
     if [ "$FORCE_RESET" = true ]; then
-        # Clean untracked files/directories if performing a nuclear reset
         git clean -fdx
     fi
 
-    # SELF-HEALING VERIFICATION
-    # Ensure destination web root directory exists
     if [ ! -d "$WEB_ROOT" ]; then
         mkdir -p "$WEB_ROOT" 2>/dev/null
     fi
 
-    # Fallback build if pre-compiled sync directory is missing
+    # Safety fallback: if Jenna didn't commit the pre-built `dist/`/`build/` directory, build on server
     if [ ! -d "$SYNC_DIR" ] && [ -f "package.json" ]; then
         echo "   -> Pre-compiled payload missing. Building $SITE_NAME static bundle..."
         yes 2>/dev/null | npm --yes run build 2>/dev/null || true
@@ -218,19 +240,22 @@ function deploy_site() {
         return
     fi
 
-    # DEPLOY
+    # DEPLOY VIA `rsync`:
+    #   - `-av`           : Archive mode + verbose output.
+    #   - `--delete`      : Removes stale old pages/assets from `$WEB_ROOT/` that no longer exist in `$SYNC_DIR/`.
+    #   - `--no-o --no-g` : Keeps `michael`'s current user/group ownership instead of trying `chown` (which requires root!).
+    #   - Trailing `/` on BOTH `"$SYNC_DIR/"` and `"$WEB_ROOT/"` syncs contents directly inside `$WEB_ROOT/`.
     echo "   -> Syncing $SITE_NAME to Showroom..."
-    # RSync synchronizes the web root.
-    # --delete removes files in destination that no longer exist in source
-    # --no-o --no-g preserves current user ownership instead of attempting to copy source owner
     rsync -av --delete --no-o --no-g \
         --exclude '.git' \
         --exclude '.gitignore' \
         --exclude 'README.md' \
         "$SYNC_DIR/" "$WEB_ROOT/"
 
-    # PERMISSIONS
-    # Standardize web server permissions to 755 for directories, 644 for files
+    # UNIX WEB PERMISSIONS (`chmod 755` vs `chmod 644` + `find ... -exec ... +`):
+    #   - `755` (`rwxr-xr-x`) on directories (`-type d`): Nginx (`www-data`) needs the `x` ("execute/traverse") bit to enter folders!
+    #   - `644` (`rw-r--r--`) on files (`-type f`): Owner can read/write; Nginx can read (`r--`), nobody can execute uploaded static files.
+    #   - Ending `-exec ... +` (with a `+` instead of `\;`) batches thousands of paths into ONE `chmod` call so it finishes ~50x faster!
     find "$WEB_ROOT" -type d -exec chmod 755 {} +
     find "$WEB_ROOT" -type f -exec chmod 644 {} +
     notify_indexnow_for_webroot "$WEB_ROOT"
@@ -242,10 +267,16 @@ function deploy_site() {
 # ==============================================================================
 # Keeps non-webroot infrastructure repositories (`raggiesoft-deployment-tools`
 # and `nginx-config`) synchronized with GitHub on `jessica.raggiesoft.com`.
-# If `raggiesoft-deployment-tools` advances to a new commit on `origin/main`,
-# Sarah immediately `exec`s into the newly pulled `sarah-deploy.sh` binary (once
-# per invocation, guarded by `SARAH_REEXECED=1`) so new deployment logic takes
-# effect on the exact same run without waiting 5 minutes for the next timer tick.
+#
+# HOW SELF-UPGRADING `exec` RE-ENTRY WORKS:
+#   Suppose Jenna pushes an update to `sarah-deploy.sh` AND a brand-new 12th subdomain
+#   in the same commit. When the currently running (older) `sarah-deploy.sh` pulls
+#   `raggiesoft-deployment-tools`, she detects `UPDATED=true` and runs:
+#     `export SARAH_REEXECED=1`
+#     `exec "/home/michael/raggiesoft-deployment-tools/sarah-deploy.sh" "${SARAH_ORIG_ARGS[@]}"`
+#   `exec` replaces the running Bash process image in-place with the NEW `sarah-deploy.sh`
+#   (while `SARAH_REEXECED=1` prevents an infinite loop!), so the brand-new 12th subdomain
+#   deploys on THIS exact run without waiting 5 minutes for the next timer tick!
 function sync_infra_repo() {
     local REPO_LABEL=$1
     local REPO_DIR=$2
@@ -288,15 +319,12 @@ function sync_infra_repo() {
         git clean -fdx
     fi
 
-    # Standardize permissions (755 for directories and .sh scripts, 644 for config files)
+    # `-path "$REPO_DIR/.git" -prune -o` skips internal `.git/` objects while setting `755` on dirs/`.sh` and `644` on files
     find "$REPO_DIR" -path "$REPO_DIR/.git" -prune -o -type d -exec chmod 755 {} +
     find "$REPO_DIR" -path "$REPO_DIR/.git" -prune -o -type f -exec chmod 644 {} +
     find "$REPO_DIR" -path "$REPO_DIR/.git" -prune -o -type f -name "*.sh" -exec chmod 755 {} +
     echo "✅ SARAH: $REPO_LABEL Sync Complete."
 
-    # Self-upgrade re-entry: if Deployment Tools just pulled a new commit and we
-    # haven't re-exec'd yet in this run, replace the running bash process cleanly
-    # with the newly downloaded `sarah-deploy.sh`.
     if [ "$REPO_DIR" == "/home/michael/raggiesoft-deployment-tools" ] && [ "$UPDATED" = true ] && [ "${SARAH_REEXECED:-0}" != "1" ]; then
         ln -sf "/home/michael/raggiesoft-deployment-tools/sarah-deploy.sh" "/home/michael/sarah-deploy.sh" 2>/dev/null || true
         echo "🔄 SARAH: Self-upgrade complete! Re-launching updated sarah-deploy.sh..."
@@ -308,18 +336,18 @@ function sync_infra_repo() {
 # ==============================================================================
 # Helper: sync_nginx_vhosts <nginx_repo_dir>
 # ==============================================================================
-# Zero-touch Nginx virtual host & web-root reconciler with atomic rollback:
-#   1. Verifies passwordless `sudo -n` availability so cron NEVER blocks.
-#   2. Scans `root /var/www/...;` directives across `$NGINX_REPO_DIR/*.conf` and
-#      provisions any brand-new `/var/www/<site>` directory (`michael:www-data`,
-#      mode `755`) while leaving already-populated web roots untouched.
-#   3. Compares each `$NGINX_REPO_DIR/*.conf` byte-for-byte (`cmp -s`) against
-#      `/etc/nginx/sites-available/<conf>` and verifies its `sites-enabled`
-#      symlink. Returns in <2ms if zero vhost configs changed.
-#   4. Snapshots current `/etc/nginx/sites-available/*.conf` and active symlinks,
-#      installs changed/new `.conf` files, validates via `sudo -n nginx -t`, and
-#      reloads Nginx ONLY if syntax passes 100%—otherwise automatically restores
-#      the snapshot so live production traffic is never interrupted.
+# Zero-touch Nginx virtual host & web-root reconciler with **atomic rollback**:
+#   1. `sudo -n true`: `-n` ("non-interactive") checks if passwordless sudo is active;
+#      if a password would be required, returns immediately rather than hanging `cron`/`systemd`!
+#   2. `shopt -s nullglob`: Tells Bash that if `*.conf` matches 0 files, expand to an empty
+#      array `()` instead of the literal string `"*.conf"`.
+#   3. Scans `root /var/www/...;` lines via `awk` (`<<< "$DECLARED_ROOTS"` is a Bash "here-string"
+#      feeding a variable into `while read`) and creates any missing `/var/www/<site>` folders.
+#   4. `cmp -s` compares each `.conf` byte-for-byte against `/etc/nginx/sites-available/`;
+#      if nothing changed, returns in <2ms without touching Nginx!
+#   5. Snapshots live configs into `mktemp -d`, applies updates, runs `sudo -n nginx -t` to syntax-test
+#      Nginx BEFORE reloading (`systemctl reload nginx`), and **rolls back** to the snapshot if `nginx -t`
+#      catches a syntax typo—guaranteeing live production websites NEVER go down!
 function sync_nginx_vhosts() {
     local NGINX_REPO_DIR="$1"
     if [ ! -d "$NGINX_REPO_DIR" ] || [ ! -d "/etc/nginx/sites-available" ]; then
@@ -338,7 +366,7 @@ function sync_nginx_vhosts() {
         return 0
     fi
 
-    # 1. Ensure any declared /var/www/* root exists (skipping populated dirs)
+    # 1. Ensure any declared `/var/www/*` root exists (skipping already-existing dirs)
     local DECLARED_ROOTS
     DECLARED_ROOTS=$(awk '$1 == "root" { gsub(/;/, "", $2); if ($2 ~ /^\/var\/www\//) print $2 }' "${CONF_FILES[@]}" | sort -u)
     while IFS= read -r web_dir; do
@@ -351,7 +379,7 @@ function sync_nginx_vhosts() {
         fi
     done <<< "$DECLARED_ROOTS"
 
-    # 2. Fast diff check across all managed .conf files
+    # 2. Fast byte-for-byte diff check (`cmp -s`) across all managed `.conf` files
     local NEEDS_SYNC=false
     for src_conf in "${CONF_FILES[@]}"; do
         local conf_name
@@ -429,50 +457,46 @@ function sync_nginx_vhosts() {
     rm -rf "$BACKUP_DIR"
 }
 
-# 0. PROCESS INFRASTRUCTURE & DEPLOYMENT REPOSITORIES
+# ==============================================================================
+# EXECUTION PIPELINE: INFRASTRUCTURE REPOS -> ALL 11 LIVE SHOWROOMS
+# ==============================================================================
+
+# 0. PROCESS INFRASTRUCTURE & DEPLOYMENT REPOSITORIES FIRST
 sync_infra_repo "Deployment Tools" "/home/michael/raggiesoft-deployment-tools"
 sync_infra_repo "Nginx Config" "/home/michael/nginx-config"
 sync_nginx_vhosts "/home/michael/nginx-config"
 
-# 1. PROCESS RAGGIESOFT HUB
+# 1. PROCESS RAGGIESOFT HUB (PHP 8.5 + DaisyUI 5 — deploys directly from repo root)
 deploy_site "Hub" "/home/michael/raggiesoft-hub" "/var/www/raggiesoft.com"
 
-# 2. PROCESS NEBULAE INCUBATOR
+# 2. PROCESS NEBULAE INCUBATOR (Cosmic Visualizer — deploys from repo root)
 deploy_site "Nebulae" "/home/michael/raggiesoft-nebulae" "/var/www/nebulae.raggiesoft.com"
 
-# 3. PROCESS STARDUST ENGINE LIBRARY
+# 3. PROCESS STARDUST ENGINE LIBRARY (RaggieSoft Book Reader PHP 8.5 SPA — deploys from repo root)
 deploy_site "Books" "/home/michael/raggiesoft-book-library" "/var/www/raggiesoft-book-library"
 
-# 4. PROCESS LORE GRAPH
-# Uses a specific sub-directory (out) as the deployment payload instead of the repo root
+# 4. PROCESS LORE GRAPH (Next.js 16 + React 19 Static Export — deploys from `/out` subfolder)
 deploy_site "Lore" "/home/michael/raggiesoft-lore" "/var/www/lore.raggiesoft.com" "/home/michael/raggiesoft-lore/out"
 
-# 5. PROCESS ENGINE ROOM RECORDS (MUSIC)
-# Syncs the pre-compiled SvelteKit static bundle (/build) into /var/www/music.raggiesoft.com
+# 5. PROCESS ENGINE ROOM RECORDS / THE LISTENING ROOM (SvelteKit 2 + Svelte 5 Runes — deploys from `/build`)
 deploy_site "Music" "/home/michael/raggiesoft-music" "/var/www/music.raggiesoft.com" "/home/michael/raggiesoft-music/build"
 
-# 6. PROCESS EXECUTIVE SYSTEMS ARCHITECT DOSSIER (PORTFOLIO - michaelpragsdale.com)
-# Syncs the pre-compiled Angular 19 Zoneless browser bundle into /var/www/michaelpragsdale.com
+# 6. PROCESS EXECUTIVE SYSTEMS ARCHITECT DOSSIER (`michaelpragsdale.com` — Angular 19 Zoneless `/dist/.../browser`)
 deploy_site "Portfolio" "/home/michael/raggiesoft-portfolio" "/var/www/michaelpragsdale.com" "/home/michael/raggiesoft-portfolio/dist/raggiesoft-portfolio/browser"
 
-# 7. PROCESS ENGINE ROOM RECORDS IMPRINT (engineroom.raggiesoft.com)
-# Syncs the pre-compiled Astro 6 static bundle (/dist) into /var/www/engineroom.raggiesoft.com
+# 7. PROCESS ENGINE ROOM RECORDS IMPRINT (`engineroom.raggiesoft.com` — Astro 6 Static SSG `/dist`)
 deploy_site "Engine Room Records" "/home/michael/raggiesoft-engine-room-records" "/var/www/engineroom.raggiesoft.com" "/home/michael/raggiesoft-engine-room-records/dist"
 
-# 8. PROCESS THE STARDUST ENGINE (stardust.raggiesoft.com)
-# Syncs the pre-compiled Nuxt 4 + Vue 3 static bundle (/.output/public) into /var/www/stardust.raggiesoft.com
+# 8. PROCESS THE STARDUST ENGINE (`stardust.raggiesoft.com` — Nuxt 4 + Vue 3 Static SSG `/.output/public`)
 deploy_site "The Stardust Engine" "/home/michael/raggiesoft-stardust-engine" "/var/www/stardust.raggiesoft.com" "/home/michael/raggiesoft-stardust-engine/.output/public"
 
-# 9. PROCESS RAGGIESOFT MEDIA CORPORATE HUB (corporate.raggiesoft.com)
-# Syncs the pre-compiled Bootstrap 5.3.8 static bundle (/dist) into /var/www/corporate.raggiesoft.com
+# 9. PROCESS RAGGIESOFT MEDIA CORPORATE HUB (`corporate.raggiesoft.com` — Bootstrap 5.3.8 Static SSG `/dist`)
 deploy_site "RaggieSoft Media" "/home/michael/raggiesoft-corporate" "/var/www/corporate.raggiesoft.com" "/home/michael/raggiesoft-corporate/dist"
 
-# 10. PROCESS RAGGIESOFT STORETRAINER (storetrainer.raggiesoft.com)
-# Syncs the pre-compiled Vanilla TypeScript + Classic Win32/Netscape 4.78 static bundle (/dist) into /var/www/storetrainer.raggiesoft.com
+# 10. PROCESS RAGGIESOFT STORETRAINER (`storetrainer.raggiesoft.com` — Vanilla TS + Win32/Netscape 4.78 `/dist`)
 deploy_site "StoreTrainer" "/home/michael/raggiesoft-storetrainer" "/var/www/storetrainer.raggiesoft.com" "/home/michael/raggiesoft-storetrainer/dist"
 
-# 11. PROCESS RAGGIESOFT BACKSTAGE (backstage.raggiesoft.com)
-# Syncs the pre-compiled Web Awesome Pro + Font Awesome Pro+ PWA static bundle (/dist) into /var/www/backstage.raggiesoft.com
+# 11. PROCESS RAGGIESOFT BACKSTAGE (`backstage.raggiesoft.com` — Web Awesome Pro + Font Awesome Pro+ PWA `/dist`)
 deploy_site "Backstage" "/home/michael/raggiesoft-backstage" "/var/www/backstage.raggiesoft.com" "/home/michael/raggiesoft-backstage/dist"
 
 

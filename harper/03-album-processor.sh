@@ -1,25 +1,30 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# HARPER MODULE 03: ALBUM PROCESSOR
+# HARPER MODULE 03: ALBUM PROCESSOR (`harper/03-album-processor.sh`)
 # ==============================================================================
-# Architecture & Purpose:
-# This module acts as the primary orchestrator for individual album processing.
-# It scans the directory tree for `album.json` files, sorts them chronologically
-# based on their narrative timeline, and handles global album-level operations.
+# PLAIN-ENGLISH OVERVIEW (100-LEVEL INTRO):
+#   Module 03 is Harper's outer loop! It visits every album across all Engine
+#   Room Records artists in chronological in-story order (`temporalCoverage`)
+#   and coordinates the per-album assembly line:
+#     1. Cleans stale `*-discography-and-lyrics.md` and `*-dsp-upload-guide.md`
+#        rollups so they rebuild cleanly in chronological order without duplicates.
+#     2. Reads `album.json` via `jq` and decides whether `OVERWRITE` applies to
+#        this specific album (making `--artist` / `--album` scoped rebuilds fast!).
+#     3. Upscales `album-art.jpg` via Real-ESRGAN (4x) and caps it at `3000x3000`
+#        pixels (`sips` on macOS / `mogrify` on Linux) to satisfy DistroKid's upload cap.
+#     4. Loops through `tracks.json`, sourcing `04-track-processor.sh` for each song,
+#        and waits (`wait "$pid"`) for all background FFmpeg encoders to finish.
+#     5. Binds the combined Markdown lyric booklet (`<safe-album-name>.md`), runs
+#        an inline Node.js helper to split song `Name` vs. `Version` for DistroKid
+#        (`dsp-upload-sheet.md`), and sources `05-archiver.sh` to pack the 6 ZIP/7z tiers!
 #
-# Key Operations:
-# 1. Finds and sorts all albums sequentially.
-# 2. Parses album metadata and creates/appends to the Master Discography Markdown.
-# 3. Downscales high-resolution cover art to 3000px for DistroKid requirements.
-# 4. Generates a master `read-me.txt` for the album.
-# 5. Spawns `04-track-processor.sh` for each track listed in `tracks.json`.
-# 6. Waits for parallel audio processing threads to complete before proceeding.
-# 7. Compiles the master combined lyric booklet.
-#
-# Maintenance Notes:
-# - Uses `jq` extensively for JSON parsing.
-# - Pushes and pops directories (`pushd`/`popd`) to maintain contextual isolation
-#   while processing each album.
+# BASH PROCESS SUBSTITUTION (`done < <(...)`) — CRITICAL 100-LEVEL CONCEPT:
+#   Look at the bottom of the main loop (`done < <(sort -n ...)`).
+#   In Bash, if you write `sort ... | while read ...; do ... done`, the pipe `|`
+#   runs the `while` loop inside a **child subshell**, meaning any changes to
+#   `HARPER_AUDIO_ERRORS` or `HARPER_ARCHIVE_ERRORS` vanish when the loop ends!
+#   Writing `while read ...; do ... done < <(sort ...)` ("process substitution")
+#   feeds `sort`'s output into the loop WITHOUT creating a subshell for the loop body!
 # ==============================================================================
 
 echo "   🔍 HARPER: Indexing vault chronologically by Narrative Year..."
@@ -29,7 +34,7 @@ TEMP_SORTED_ALBUMS="temp_sorted_albums.txt"
 # --- MASTER DISCOGRAPHY CLEANUP BLOCK ---
 # Clear out old generated Master Discography and DSP Upload Guide markdown files
 # at the start of the chronological pass so each artist's booklets are freshly bound
-# without duplicate sections.
+# without duplicate sections (`find ... -delete` deletes matching files in one pass).
 echo "   🧹 HARPER: Refreshing Master Discography & DSP Upload Guides..."
 find "$SEARCH_PATH" -name "*-discography-and-lyrics.md" -type f -delete
 find "$SEARCH_PATH" -name "*-dsp-upload-guide.md" -type f -delete
@@ -37,38 +42,41 @@ find "$SEARCH_PATH" -name "*-dsp-upload-guide.md" -type f -delete
 # ------------------------------------------------------------------------------
 # 1. Chronological Sorting Phase
 # ------------------------------------------------------------------------------
-# We sort by the fictional narrative year to ensure the discography is chronological
+# Collect `NARR_YEAR|path/to/tracks.json` lines so `sort -n` orders albums from oldest story year to newest.
+# (Note: Backticks `` `cmd` `` are classic Bourne-shell command substitution, equivalent to `$(cmd)`.)
 find "$SEARCH_PATH" -name "album.json" | while read album_file; do
     NARR_DATE=`jq -r '.temporalCoverage // empty' "$album_file"`
     NARR_YEAR=`echo "$NARR_DATE" | cut -c 1-4`
-    # Default to far future if no date is found to push it to the bottom
+    # Default to sentinel year `9999` if no date is found so undated items sort last
     if [ -z "$NARR_YEAR" ]; then NARR_YEAR="9999"; fi
     
     album_dir=`dirname "$album_file"`
-    # Only index if there is a corresponding tracks.json
+    # Only index valid album directories that also contain a `tracks.json` manifest
     if [ -f "$album_dir/tracks.json" ]; then
         echo "$NARR_YEAR|$album_dir/tracks.json" >> "$TEMP_SORTED_ALBUMS"
     fi
 done
 
-# Sort numerically by year, then extract the file path (using process substitution so the loop executes in the main shell and preserves ERRORLEVEL state)
+# Sort numerically (`-n`) by year, strip the `YEAR|` prefix (`cut -d'|' -f2` keeps field #2),
+# and iterate in the main shell via process substitution (`< <(...)`):
 while read -r tracks_file; do
     
     album_dir=`dirname "$tracks_file"`
-    # Context switch into the specific album directory
+    # `pushd` switches our working directory into `$album_dir` and pushes the old
+    # directory onto a stack so `popd` at the end of the loop always returns cleanly!
     pushd "$album_dir" > /dev/null
     
     ALBUM_JSON="album.json"
     ART_FILE="album-art.jpg"
 
-    # Failsafe abort if the file disappeared mid-run
+    # Failsafe guard if `album.json` disappeared mid-run
     if [ ! -f "$ALBUM_JSON" ]; then
         popd > /dev/null
         continue
     fi
     
     # --------------------------------------------------------------------------
-    # 2. Metadata Extraction
+    # 2. Metadata Extraction (`jq -r` Raw JSON Queries with `//` Fallbacks)
     # --------------------------------------------------------------------------
     ALBUM_ARTIST=`jq -r '.byArtist.name // empty' "$ALBUM_JSON"`
     ALBUM_NAME=`jq -r '.name // empty' "$ALBUM_JSON"`
@@ -77,10 +85,11 @@ while read -r tracks_file; do
     ALBUM_CLEARANCE=`jq -r '.conditionsOfAccess // "Cleared - Suno Commercial Premium License"' "$ALBUM_JSON"`
     NARRATIVE_DATE=`jq -r '.temporalCoverage // empty' "$ALBUM_JSON"`
     REAL_RELEASE_DATE=`jq -r '.datePublished // empty' "$ALBUM_JSON"`
+    # `.gtin12 // .identifier // empty` checks `gtin12` first, then `identifier`, then empty string
     ALBUM_UPC=`jq -r '.gtin12 // .identifier // empty' "$ALBUM_JSON"`
     ALBUM_TYPE=`jq -r '.albumProductionType // "StudioAlbum"' "$ALBUM_JSON"`
     
-    # Default to today if no real release date is provided
+    # Default to today (`YYYY-MM-DD`) if no real-world release date is provided
     if [ -z "$REAL_RELEASE_DATE" ]; then REAL_RELEASE_DATE=`date +"%Y-%m-%d"`; fi
 
     NARRATIVE_YEAR=`echo "$NARRATIVE_DATE" | cut -c 1-4`
@@ -93,13 +102,10 @@ while read -r tracks_file; do
     # --------------------------------------------------------------------------
     # 2b. Scoped Rebuild & Overwrite Resolution (--rebuild [--artist] [--album])
     # --------------------------------------------------------------------------
-    # Determine whether this specific album is targeted for a forced rebuild:
-    # - Global Rebuild (`--rebuild` with no `--artist`): OVERWRITE=true for all albums.
-    # - Artist Rebuild (`--rebuild --artist <slug>`): OVERWRITE=true for all albums by that artist.
-    # - Single-Album Rebuild (`--rebuild --artist <slug> --album <slug>`): OVERWRITE=true ONLY for that album.
-    # - Non-targeted albums during a scoped rebuild retain OVERWRITE=false so their
-    #   metadata/ISRCs still populate the global catalogs (`metadata.json` & `master-catalog.json`)
-    #   in ~1–2 seconds without re-running RealESRGAN, FFmpeg, or 7-Zip.
+    # Why Harper still loops through non-targeted albums with `OVERWRITE=false`:
+    # Because `06-finalize.sh` rebuilds the global `metadata.json` and `master-catalog.json`
+    # across ALL artists! Setting `OVERWRITE=false` on non-targeted albums lets them
+    # contribute their JSON rows in milliseconds while skipping Real-ESRGAN, FFmpeg, and 7-Zip!
     if [ "$REBUILD" = true ]; then
         if [ -z "$TARGET_ARTIST" ]; then
             OVERWRITE=true
@@ -120,17 +126,20 @@ while read -r tracks_file; do
     fi
     
     WEB_URL="/engine-room/artists/$ARTIST_SLUG/albums/$ALBUM_SLUG"
-    # Create a safe filesystem name stripping punctuation and spaces
+    # Build a URL/filename-safe slug via Unix `tr` ("translate characters"):
+    #   1. `tr '[:upper:]' '[:lower:]'` -> lowercase all letters
+    #   2. `tr -d '[:punct:]'`          -> delete (`-d`) punctuation marks
+    #   3. `tr ' ' '-'`                 -> turn spaces into hyphens
     SAFE_ALBUM_NAME=`echo "$ALBUM_NAME" | tr '[:upper:]' '[:lower:]' | tr -d '[:punct:]' | tr ' ' '-'`
     ARCHIVE_BASE_NAME="$NARRATIVE_YEAR-$SAFE_ALBUM_NAME"
     CURRENT_DATETIME=`date +"%m-%d-%Y %I:%M:%S %p"`
 
     # --------------------------------------------------------------------------
-    # 3. Master Discography Generation
+    # 3. Master Discography Generation (`<artist>-discography-and-lyrics.md`)
     # --------------------------------------------------------------------------
     MASTER_DISCO_FILE="$SEARCH_PATH/$ARTIST_SLUG/$ARTIST_SLUG-discography-and-lyrics.md"
 
-    # Initialize the file if it doesn't exist or is completely empty
+    # Write the top-of-booklet artist title header only once (when the file doesn't exist or is 0 lines)
     if [ ! -f "$MASTER_DISCO_FILE" ] || [ "$OVERWRITE" = true ]; then
         if ! grep -q "" "$MASTER_DISCO_FILE" 2>/dev/null; then
             echo "      📝 HARPER: Initializing Master Discography for $ALBUM_ARTIST..."
@@ -141,7 +150,7 @@ while read -r tracks_file; do
         fi
     fi
     
-    # Print the Album Header into the markdown
+    # Append (`>>`) this album's section heading into the artist's Master Discography
     if [ "$ALBUM_TYPE" != "StudioAlbum" ]; then
         echo "# $ALBUM_NAME ($NARRATIVE_YEAR) [$ALBUM_TYPE]" >> "$MASTER_DISCO_FILE"
     else
@@ -156,23 +165,23 @@ while read -r tracks_file; do
     
     echo "   💿 HARPER: Processing '$ALBUM_NAME' by $ALBUM_ARTIST..."
 
-    # Resolve decoupled Vault and Master-WAV paths in /raggiesoft-vaults (kept off DigitalOcean Spaces CDN)
+    # Resolve decoupled Vault and Master-WAV paths in `/raggiesoft-vaults` (kept off DigitalOcean Spaces CDN)
     export ARTIST_VAULT_DIR="$VAULTS_ROOT/$ARTIST_SLUG"
     export MASTER_WAV_DIR="$ARTIST_VAULT_DIR/master-wav"
     export ALBUM_VAULT_DIR="$ARTIST_VAULT_DIR/$ALBUM_SLUG/vault"
 
-    # Scaffold public CDN output directory structure in /raggiesoft-assets
+    # Scaffold public CDN output folders (`mkdir -p` creates nested folders idempotently)
     mkdir -p web-mp3 streaming-services/album-art streaming-services/lyrics streaming-services/song-metadata
 
-    # Scaffold private local vault directory structure in /raggiesoft-vaults
+    # Scaffold private local vault folders in `/raggiesoft-vaults`
     mkdir -p "$ALBUM_VAULT_DIR/mp3" "$ALBUM_VAULT_DIR/ogg" "$ALBUM_VAULT_DIR/flac" "$ALBUM_VAULT_DIR/wav" "$ALBUM_VAULT_DIR/archives"
 
     # --------------------------------------------------------------------------
-    # 4. Album Art Optimization
+    # 4. Album Art Optimization (Real-ESRGAN 4x Upscale -> 3000px DistroKid Cap)
     # --------------------------------------------------------------------------
     UPSCALED_ART="streaming-services/album-art/$ART_FILE"
     
-    # Run RealESRGAN upscale or just copy if not available
+    # Upscale raw `album-art.jpg` (`-s 4` = 4x scale, `-n realesrgan-x4plus` neural model) when missing or overwriting
     if [ -f "$ART_FILE" ] && [ ! -f "$UPSCALED_ART" ] && [ "$METADATA_ONLY" = false ]; then
         if [ "$USE_UPSCALER" = true ]; then
             echo "      🖼️ HARPER: Upscaling album art ($ART_FILE)..."
@@ -184,7 +193,6 @@ while read -r tracks_file; do
                 MODELS_PATH="$UPSCALER_BASE/ubuntu/models"
             fi
             
-            # Additional args for iGPU safe mode
             UPSCALER_ARGS=""
             if [ "$IGPU_DETECTED" = true ]; then
                 UPSCALER_ARGS="-t 100"
@@ -206,7 +214,6 @@ while read -r tracks_file; do
                 MODELS_PATH="$UPSCALER_BASE/ubuntu/models"
             fi
             
-            # Additional args for iGPU safe mode
             UPSCALER_ARGS=""
             if [ "$IGPU_DETECTED" = true ]; then
                 UPSCALER_ARGS="-t 100"
@@ -219,17 +226,17 @@ while read -r tracks_file; do
         fi
     fi
 
-    # DistroKid rejects album art larger than ~3000px square. Downscale if necessary.
+    # DistroKid & Apple Music optimal cover spec is `3000x3000` (4x upscaling a 1024px image produces 4096px).
+    # On macOS, Apple's built-in `sips -Z 3000` resizes the longest edge down to 3000px while keeping aspect ratio!
     if [ -f "$UPSCALED_ART" ]; then
         if [[ "$OSTYPE" == "darwin"* ]]; then
-            # macOS native sips utility
             CURRENT_WIDTH=`sips -g pixelWidth "$UPSCALED_ART" | tail -n1 | awk '{print $2}'`
             if [ -n "$CURRENT_WIDTH" ] && [ "$CURRENT_WIDTH" -gt 3000 ]; then
                 echo "      📏 HARPER: Downscaling art from "$CURRENT_WIDTH"px to DistroKid optimal (3000px)..."
                 sips -Z 3000 "$UPSCALED_ART" > /dev/null 2>&1
             fi
         elif command -v identify &> /dev/null && command -v mogrify &> /dev/null; then
-            # Imagemagick fallback for Linux CI/CD environments
+            # ImageMagick fallback on Linux (`3000x3000\>` means "shrink only if larger than 3000px")
             CURRENT_WIDTH=`identify -format "%w" "$UPSCALED_ART" 2>/dev/null`
             if [ -n "$CURRENT_WIDTH" ] && [ "$CURRENT_WIDTH" -gt 3000 ]; then
                 echo "      📏 HARPER: Downscaling art from "$CURRENT_WIDTH"px to DistroKid optimal (3000px)..."
@@ -238,7 +245,11 @@ while read -r tracks_file; do
         fi
     fi
 
-    # Format the FFmpeg parameter for injecting album art into track metadata
+    # Prepare `$ART_FILE_PARAM` for `02-audio-engine.sh`:
+    #   - `-i album-art.jpg` : Adds the JPEG as FFmpeg input #1 (the WAV is input #0).
+    #   - `-map 0:a`         : Maps the audio stream from input #0.
+    #   - `-map 1:v`         : Maps the image ("video") stream from input #1.
+    #   - `-codec:v mjpeg -disposition:v attached_pic`: Marks the JPEG as embedded album cover art!
     if [ ! -f "$ART_FILE" ]; then
         export ART_FILE_PARAM=""
     else
@@ -252,7 +263,7 @@ while read -r tracks_file; do
     if [ -d "suno-prompts" ]; then HAS_SUNO_PROMPTS=true; fi
 
     # --------------------------------------------------------------------------
-    # 5. Master Read-Me Generation
+    # 5. Master Read-Me Generation (`read-me.txt` bundled into all 6 ZIP/7z archives)
     # --------------------------------------------------------------------------
     README_FILE="read-me.txt"
     {
@@ -284,26 +295,30 @@ while read -r tracks_file; do
     } > "$README_FILE"
 
     # --------------------------------------------------------------------------
-    # 6. Track Processing Loop (Sub-Module)
+    # 6. Track Processing Loop (Sources `04-track-processor.sh` per Song)
     # --------------------------------------------------------------------------
+    # `declare -a PIDS=()` initializes an empty indexed array of background FFmpeg Process IDs (`$!`).
     declare -a PIDS=()
     ALBUM_MINTED_NEW_ISRC=false
 
-    # Loop through the tracks array in tracks.json and spawn the track processor
+    # `jq -c` emits each track object compacted onto a single line so `while read -r track_json`
+    # receives one complete track JSON object per iteration (again using `< <(...)` process substitution!).
     while read -r track_json; do
         source "$MODULE_DIR/04-track-processor.sh"
     done < <(jq -c 'if type == "array" then .[] else .tracks[] end' "tracks.json")
 
     # --------------------------------------------------------------------------
-    # 7. Thread Pool Synchronization
+    # 7. Thread Pool Synchronization ("Barrier Wait" Before Zipping)
     # --------------------------------------------------------------------------
-    # Wait for all parallel background FFmpeg processes to finish before zipping
-    # Array length logic rewritten safely for bash compatibility
+    # `04-track-processor.sh` launched FFmpeg encoders asynchronously in the background (`&`).
+    # We MUST `wait "$pid"` on every background Process ID in `${PIDS[@]}` before `05-archiver.sh`
+    # zips the folder—otherwise 7-Zip would archive half-written audio files!
     ARRAY_LENGTH=`echo ${#PIDS[@]}`
     if [ "$ARRAY_LENGTH" -gt 0 ]; then
         echo "      ⏳ HARPER: Waiting for background audio rendering pool to finalize..."
         for pid in "${PIDS[@]}"; do
             wait "$pid"
+            # `$?` captures the exact return code of `press_audio_formats` from that background PID!
             EXIT_CODE=$?
             if [ $EXIT_CODE -ne 0 ]; then
                 echo "🛑 HARPER FATAL ERROR: Audio processing crashed on PID $pid (ERRORLEVEL=${ERR_AUDIO_TRANSCODE_FAILED:-2})!"
@@ -315,7 +330,7 @@ while read -r tracks_file; do
     fi
 
     # --------------------------------------------------------------------------
-    # 8. Master Lyric Booklet Generation
+    # 8. Master Lyric Booklet Generation (`<safe-album-name>.md`)
     # --------------------------------------------------------------------------
     if [ "$HAS_LYRICS" = true ]; then
         COMBINED_LYRICS_FILE="$SAFE_ALBUM_NAME.md"
@@ -325,7 +340,7 @@ while read -r tracks_file; do
             echo "" > "$COMBINED_LYRICS_FILE"
             echo "" >> "$COMBINED_LYRICS_FILE"
 
-            # Re-read tracks.json to ensure correct ordering when appending lyrics
+            # Re-read `tracks.json` in exact album tracklist order and concatenate each `lyrics/<fileName>.md`
             jq -c 'if type == "array" then .[] else .tracks[] end' "tracks.json" | while read -r track_json_booklet; do
                 FILE_BASE_BOOKLET=`echo "$track_json_booklet" | jq -r '.fileName'`
                 LYRIC_MD_BOOKLET="lyrics/$FILE_BASE_BOOKLET.md"
@@ -348,11 +363,15 @@ while read -r tracks_file; do
     # --------------------------------------------------------------------------
     # 8b. Album-Level DSP Upload Reference Sheet Generation (DistroKid)
     # --------------------------------------------------------------------------
-    # Generates `dsp-upload-sheet.md` directly inside the album folder (and mirrors
-    # it to `streaming-services/dsp-upload-sheet.md`), plus appends to the artist-level
-    # `$ARTIST_SLUG-dsp-upload-guide.md` rollup so the producer has a clean Artist -> Album
-    # -> Track reference sheet with separated `Name` and `Version` fields ready at the
-    # distributor upload screen.
+    # WHY THIS INLINE NODE.JS SCRIPT (`node -e '...'`) EXISTS:
+    #   Commercial DSPs (Apple Music / Spotify via DistroKid) enforce strict title formatting:
+    #   parenthetical/bracketed version tags like `(Live in Norfolk)`, `[Radio Edit]`, `(Demo)`,
+    #   or `(feat. ...)` MUST be stripped out of the main song `Name` field and entered into
+    #   DistroKid's separate `Version` / `Featured Artist` boxes—especially on Live Albums!
+    #   This inline Node.js script parses `album.json` + `tracks.json`, separates `Name` from
+    #   `Version` via regexes, checks whether each WAV master and clean lyric `.txt` is ready,
+    #   writes `dsp-upload-sheet.md` (and `streaming-services/dsp-upload-sheet.md`), and appends
+    #   an album summary to the artist-level `$ARTIST_SLUG-dsp-upload-guide.md`.
     export DSP_SHEET_FILE="dsp-upload-sheet.md"
     export ARTIST_DSP_GUIDE="$SEARCH_PATH/$ARTIST_SLUG/$ARTIST_SLUG-dsp-upload-guide.md"
 
@@ -600,9 +619,11 @@ while read -r tracks_file; do
       }
     '
 
-    # Pass execution down to the archive generator module
+    # Pass execution down to `05-archiver.sh` to bundle all 6 ZIP / `.7z` download packages
     source "$MODULE_DIR/05-archiver.sh"
     
+    # Remove the temporary root `read-me.txt` now that it has been copied into all 6 archives,
+    # and `popd` back out of `$album_dir` ready for the next album!
     rm "$README_FILE"
     popd > /dev/null
 done < <(sort -n "$TEMP_SORTED_ALBUMS" | cut -d'|' -f2)

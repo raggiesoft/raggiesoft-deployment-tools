@@ -1,49 +1,50 @@
 #!/bin/bash
-
 # ============================================================================
-# Architectural Block: samantha-docx.sh
+# Architectural Block: samantha-docx.sh (Legacy DOCX Shatter Protocol)
 # ============================================================================
-# This script ("Samantha") acts as a document ingestor and shatter protocol, 
-# transforming legacy DOCX narrative files and lore sheets into structured 
-# Markdown suitable for static web deployment.
+# PLAIN-ENGLISH OVERVIEW (100-LEVEL INTRO):
+#   Before our books moved to native Markdown folders (`eXXX/cXXX/pXXX.md`
+#   compiled by `paige.php`), early manuscripts were written as single giant
+#   Microsoft Word `.docx` files (`books/<name>/<name>.docx`).
+#   `samantha-docx.sh` ("Samantha: Passive DOCX Extraction & Shatter Protocol")
+#   converts those legacy Word `.docx` manuscripts into GitHub-Flavored Markdown
+#   via **Pandoc**, "shatters" the giant file into clean `e001/c001/s001.md`
+#   chapter chunks using an **AWK state machine** driven by `#` / `##` / `###`
+#   heading levels, and compiles a nested `katie.json` table-of-contents via `jq`!
 #
-# Key Responsibilities:
-# 1. Lore Extraction: Uses `pandoc` to convert DOCX lore files into GFM (GitHub Flavored Markdown).
-#    It includes protection mechanisms to prevent overwriting newer manual Markdown edits.
-# 2. Narrative Shattering: Takes monolithic DOCX manuscript files and splits them 
-#    into individual chapter/part Markdown files based on header depths (#, ##, ###).
-# 3. JSON Indexing: Uses `awk` to parse the monolithic document structure and `jq` 
-#    to generate a structured `katie.json` manifest representing books, chapters, and parts.
-# 4. Web Deployment: Copies the final generated Markdown and JSON artifacts into the 
-#    public-facing `raggiesoft-narratives` repository for web presentation.
+# BUILT-IN NON-DESTRUCTIVE SAFETY SHIELDS:
+#   1. Lore Timestamp Shield (`-nt` = "newer than"): If a local `.md` lore file
+#      was edited more recently than the `.docx`, Pandoc skips it so manual
+#      Markdown edits are NEVER overwritten!
+#   2. Manuscript Chunk Shield: If `books/<name>/manuscript/001-*.md` chunks
+#      already exist on disk, Samantha skips `.docx` shattering completely and
+#      lets `samantha-md.sh` / `paige.php` own the native Markdown files.
 #
-# Maintenance Notes:
-# - Depends heavily on `pandoc`, `awk`, and `jq` being installed on the host system.
-# - The AWK shattering logic relies strictly on Markdown headers: 
-#   # Book Title, ## Chapter Title, ### Part Title.
-# - If the structure of the incoming DOCX changes (e.g., header levels shift), 
-#   the AWK block must be adjusted accordingly.
+# INPUTS & OUTPUTS:
+#   - Reads: `books/<slug>/<slug>.docx` and `books/<slug>/<slug>-lore.docx`
+#   - Writes: `books/<slug>/manuscript/001-*.md`, `raggiesoft-narratives/lore/<slug>/`,
+#     and `raggiesoft-narratives/books/<slug>/eXXX/cXXX/sXXX.md` + `katie.json`.
 # ============================================================================
 
 echo "👱‍♀️ Samantha: Taking the podium. Passive DOCX Extraction Protocol initialized!"
 
-# Fail fast if the required 'books' directory is not present in the current workspace.
+# Fail fast if the local `books/` staging folder is not present in the current working directory.
 if [[ ! -d "books" ]]; then
     echo "   *Whistle blow!* I can't find the 'books' directory. Are we on the wrong practice field?"
     exit 1
 fi
 
-# Iterate over each book project directory.
+# Iterate over each book staging folder (`books/*/` trailing slash matches directories only).
 for DIR in books/*/; do
     BASE=$(basename "$DIR")
     
-    # LOCAL SOURCES
+    # LOCAL STAGING SOURCES
     NARRATIVE_DOCX="books/$BASE/$BASE.docx"
     LORE_DOCX="books/$BASE/$BASE-lore.docx"
     LOCAL_LORE_MD="books/$BASE/$BASE-lore.md"
     MANUSCRIPT_DIR="books/$BASE/manuscript"
     
-    # PUBLIC DEPLOYMENT FOLDERS (resolved from ~/Developer/raggiesoft-deployment-tools)
+    # PUBLIC DEPLOYMENT FOLDERS (resolved relative to `raggiesoft-deployment-tools/`)
     if [[ -d "../raggiesoft-servers" ]]; then
         SERVER_ROOT="../raggiesoft-servers"
     else
@@ -59,23 +60,23 @@ for DIR in books/*/; do
     FINAL_WEB_LORE="$OUT_LORE_DIR/${BASE}-lore.md"
 
     # -----------------------------------------
-    # PROCESS LORE
+    # 1. PROCESS LORE DOCX -> GFM MARKDOWN
     # -----------------------------------------
     if [[ -f "$LORE_DOCX" ]]; then
-        # Protection mechanism: If a local markdown file exists and is newer than the DOCX, 
-        # assume manual edits were made and skip the destructive pandoc conversion.
+        # BASH `[[ "$FILE_A" -nt "$FILE_B" ]]` ("Newer Than" Modification-Time Check):
+        # Protects hand-edited Markdown if `$LOCAL_LORE_MD` has a newer timestamp than `$LORE_DOCX`!
         if [[ -f "$LOCAL_LORE_MD" ]] && [[ "$LOCAL_LORE_MD" -nt "$LORE_DOCX" ]]; then
             echo "   🛡️ [PROTECT] Local '$LOCAL_LORE_MD' is newer than DOCX. Skipping Pandoc."
         else
             echo "   Found legacy DOCX lore sheet for '$BASE'. Extracting..."
-            # Convert DOCX to GitHub Flavored Markdown without line wrapping.
+            # `pandoc -t gfm --wrap=none`: Converts Word `.docx` to GitHub-Flavored Markdown
+            # (`-t gfm`) keeping each paragraph on one clean line (`--wrap=none`).
             pandoc --verbose "$LORE_DOCX" -t gfm --wrap=none -o "$LOCAL_LORE_MD"
         fi
         
-        # Deploy the generated lore file to the public narrative repository.
+        # Copy to public `raggiesoft-narratives/lore/` only if bytes actually changed (`cmp -s`)
         if [[ -f "$LOCAL_LORE_MD" ]]; then
             mkdir -p "$OUT_LORE_DIR"
-            # Only copy if the content actually differs, reducing unnecessary disk I/O.
             if [[ -f "$FINAL_WEB_LORE" ]] && cmp -s "$LOCAL_LORE_MD" "$FINAL_WEB_LORE"; then
                 echo "   No tempo changes in lore sync. Skipping."
             else
@@ -86,11 +87,10 @@ for DIR in books/*/; do
     fi
 
     # -----------------------------------------
-    # PROCESS NARRATIVE (Passive Mode)
+    # 2. PROCESS NARRATIVE DOCX (Passive Shatter Mode)
     # -----------------------------------------
     if [[ -f "$NARRATIVE_DOCX" ]]; then
-        # SHIELD CHECK: Is the manuscript already natively chunked?
-        # If we find numbered markdown chunks, assume the document is already managed natively.
+        # SHIELD CHECK: Count existing numbered Markdown chunks (`001-*.md`); if `> 0`, never overwrite them!
         MD_COUNT=$(find "$MANUSCRIPT_DIR" -maxdepth 1 -name "[0-9][0-9][0-9]-*.md" 2>/dev/null | wc -l)
         
         if [[ -d "$MANUSCRIPT_DIR" ]] && [[ $MD_COUNT -gt 0 ]]; then
@@ -100,26 +100,30 @@ for DIR in books/*/; do
         
         echo "   Found legacy DOCX narrative score for '$BASE'. Shattering into manuscript chunks..."
         
-        # Convert the entire monolithic DOCX into a single temporary markdown file.
+        # Step A: Convert the entire monolithic `.docx` into one temporary Markdown file (`$TMP_MD`)
         TMP_MD="books/$BASE/${BASE}_tmp.md"
         if ! pandoc --verbose "$NARRATIVE_DOCX" -t gfm --wrap=none -o "$TMP_MD"; then
             echo "   *Whistle blow!* Permission error on '$NARRATIVE_DOCX'."
             continue
         fi
         
-        # Setup directories for local chunk storage and public web deployment.
         mkdir -p "$MANUSCRIPT_DIR"
         mkdir -p "$OUT_NARRATIVE_DIR"
         
-        # Clear old web artifacts to ensure deleted parts don't ghost in the final build.
+        # Wipe stale output subfolders inside `$OUT_NARRATIVE_DIR` while keeping `$OUT_NARRATIVE_DIR` itself (`-mindepth 1`)
         find "$OUT_NARRATIVE_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
         
-        # Initialize a temporary JSONL index to log the structure during the AWK pass.
         TEMP_JSONL="$OUT_NARRATIVE_DIR/temp_index.jsonl"
         > "$TEMP_JSONL"
 
-        # The core logic: AWK script to parse the monolithic Markdown file and split it into 
-        # individual files based on header depth (# = Book, ## = Chapter, ### = Part).
+        # Step B: HOW THIS EMBEDDED `awk` STATE MACHINE WORKS (100-LEVEL INTRO):
+        #   `awk` reads `$TMP_MD` top-to-bottom, one line (`$0`) at a time (`LC_ALL=C` speeds up byte-level ASCII regexes,
+        #   and `-v name=value` passes Bash variables into `awk`!).
+        #   - `BEGIN { ... }` runs once before Line 1 to initialize counters (`book_count`, `chap_count`, `part_count`).
+        #   - `/^# /`   matches Level-1 headings -> increments `book_count`, creates `e001/`, opens `manuscript/001-slug.md`.
+        #   - `/^## /`  matches Level-2 headings -> increments `chap_count`, creates `e001/c001/`.
+        #   - `/^### /` matches Level-3 headings -> increments `part_count`, opens `e001/c001/s001.md`, and logs JSONL metadata.
+        #   - `{ ... }` at the bottom matches every normal prose line and appends (`>>`) it into the currently open file!
         LC_ALL=C awk -v base_dir="$OUT_NARRATIVE_DIR" -v manu_dir="$MANUSCRIPT_DIR" -v json_log="$TEMP_JSONL" '
         
         # Helper to sanitize strings for JSON output.
@@ -236,7 +240,7 @@ for DIR in books/*/; do
 
         echo "   Subdivisions complete. Passing the baton to Katie..."
 
-        # Consolidate the temporary JSONL index into a fully nested JSON structure.
+        # Step C: Roll up flat `.jsonl` lines into a nested `Book -> Chapters -> Parts` JSON tree via `jq -s` ("slurp" + `group_by`)
         jq -s '
           group_by(.book_num) | map({
             book_num: .[0].book_num,
