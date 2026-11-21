@@ -160,6 +160,8 @@ JESSICA_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/jessica"
 PORTFOLIO_ROOT="$SERVER_ROOT/michaelpragsdale.com/www"
 DEPLOYMENT_TOOLS_ROOT="$WORKSPACE_DIR"
 NGINX_CONFIG_ROOT="$SERVER_ROOT/nginx-config"
+DESKTOP_APPS_ROOT="$PARENT_ROOT/desktop-apps"
+DESKTOP_STORETRAINER_ROOT="$DESKTOP_APPS_ROOT/storetrainer"
 LOGS_DIR="$WORKSPACE_DIR/logs"
 
 # ============================================================================
@@ -990,6 +992,15 @@ function do_pull() {
     if [ -d "$NGINX_CONFIG_ROOT/.git" ] && (cd "$NGINX_CONFIG_ROOT" && git remote get-url origin &>/dev/null); then
         cd "$NGINX_CONFIG_ROOT" && git pull origin main
     fi
+
+    echo "   5.9 Checking Desktop App Repositories (desktop-apps/storetrainer)..."
+    if [ ! -d "$DESKTOP_STORETRAINER_ROOT" ]; then
+        echo "      > Repository missing. Cloning storetrainer from GitHub..."
+        mkdir -p "$DESKTOP_APPS_ROOT"
+        git clone https://github.com/raggiesoft/storetrainer.git "$DESKTOP_STORETRAINER_ROOT" 2>/dev/null || true
+    elif [ -d "$DESKTOP_STORETRAINER_ROOT/.git" ] && (cd "$DESKTOP_STORETRAINER_ROOT" && git remote get-url origin &>/dev/null); then
+        cd "$DESKTOP_STORETRAINER_ROOT" && git pull origin main
+    fi
     
     # Pull public CDN assets down from DigitalOcean Spaces (`rclone sync <remote> <local>`),
     # excluding `.git/` and private `vault/`/`master-wav/` paths so local Git metadata isn't wiped!
@@ -1812,6 +1823,46 @@ function do_push() {
             echo "      ✓ Pending Nginx Configs sent to GitHub."
         else
             echo "      (Nginx Configs are clean and up to date.)"
+        fi
+    fi
+
+    # 4.13 DESKTOP STORETRAINER REPOSITORY PUSH (`/desktop-apps/storetrainer` -> github.com/raggiesoft/storetrainer)
+    echo "   -> Packaging Desktop StoreTrainer Repository (/desktop-apps/storetrainer)..."
+    if [ -d "$DESKTOP_STORETRAINER_ROOT/.git" ]; then
+        cd "$DESKTOP_STORETRAINER_ROOT"
+        # Non-interactive .NET 10 pre-push compile check if dotnet SDK is installed locally
+        if [ -f "$DESKTOP_STORETRAINER_ROOT/dotnet-v2.0/StoreTrainer/StoreTrainer.csproj" ]; then
+            if command -v dotnet &>/dev/null; then
+                DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 dotnet build "$DESKTOP_STORETRAINER_ROOT/dotnet-v2.0/StoreTrainer/StoreTrainer.csproj" --verbosity quiet
+                if [ $? -ne 0 ]; then
+                    echo "🛑 JENNA: ABORTING! StoreTrainer 2.0 .NET 10 build failed."
+                    exit 1
+                fi
+            elif [ -x "/opt/homebrew/bin/dotnet" ]; then
+                DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 /opt/homebrew/bin/dotnet build "$DESKTOP_STORETRAINER_ROOT/dotnet-v2.0/StoreTrainer/StoreTrainer.csproj" --verbosity quiet
+                if [ $? -ne 0 ]; then
+                    echo "🛑 JENNA: ABORTING! StoreTrainer 2.0 .NET 10 build failed."
+                    exit 1
+                fi
+            fi
+        fi
+
+        git add -A
+
+        if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
+            git commit -m "$COMMIT_MSG"
+            if git remote get-url origin &>/dev/null; then
+                git push -u $FORCE_FLAG origin main
+                echo "      ✓ StoreTrainer Desktop repo committed and sent to GitHub."
+            else
+                echo "      ✓ StoreTrainer Desktop repo committed locally."
+            fi
+        elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
+            echo "      ⚠️  Found pending StoreTrainer Desktop commits. Pushing now..."
+            git push -u $FORCE_FLAG origin main
+            echo "      ✓ Pending StoreTrainer Desktop commits sent to GitHub."
+        else
+            echo "      (StoreTrainer Desktop repo is clean and up to date.)"
         fi
     fi
 
