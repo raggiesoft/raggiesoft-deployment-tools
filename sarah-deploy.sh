@@ -1138,4 +1138,8 @@ deploy_site "StoreTrainer" "/home/michael/raggiesoft-storetrainer" "/var/www/sto
 # 11. PROCESS RAGGIESOFT BACKSTAGE (`backstage.raggiesoft.com` — Web Awesome Pro + Font Awesome Pro+ PWA `/dist`)
 deploy_site "Backstage" "/home/michael/raggiesoft-backstage" "/var/www/backstage.raggiesoft.com" "/home/michael/raggiesoft-backstage/dist"
 
+# 12. PROCESS CEDAR RUN LAUNCHPAD (`cedarrun.raggiesoft.com` — SolidJS + TypeScript + Vite Static SSG `/dist`)
+deploy_site "Cedar Run" "/home/michael/raggiesoft-cedar-run" "/var/www/cedarrun.raggiesoft.com" "/home/michael/raggiesoft-cedar-run/dist"
+
+
 

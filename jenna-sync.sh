@@ -153,6 +153,7 @@ STARDUST_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/stardust"
 CORPORATE_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/corporate"
 STORETRAINER_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/storetrainer"
 BACKSTAGE_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/backstage"
+CEDARRUN_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/cedarrun"
 PORTFOLIO_ROOT="$SERVER_ROOT/michaelpragsdale.com/www"
 DEPLOYMENT_TOOLS_ROOT="$WORKSPACE_DIR"
 NGINX_CONFIG_ROOT="$SERVER_ROOT/nginx-config"
@@ -699,12 +700,13 @@ function generate_sitemap() {
             file_put_contents(\$sitemapPath, \$xml);
 
             // Also generate a Domain-Property Master Sitemap Index (sitemap-network.xml)
-            // referencing raggiesoft.com + all 9 *.raggiesoft.com subdomain sitemaps
+            // referencing raggiesoft.com + all 10 *.raggiesoft.com subdomain sitemaps
             // while keeping sitemap.xml pure single-host for strict crawler parsers.
             \$networkSitemapPath = \$hubRoot . '/sitemap-network.xml';
             \$networkHosts = [
                 'https://raggiesoft.com/sitemap.xml',
                 'https://books.raggiesoft.com/sitemap.xml',
+                'https://cedarrun.raggiesoft.com/sitemap.xml',
                 'https://music.raggiesoft.com/sitemap.xml',
                 'https://lore.raggiesoft.com/sitemap.xml',
                 'https://engineroom.raggiesoft.com/sitemap.xml',
@@ -738,7 +740,7 @@ function generate_sitemap() {
             file_put_contents(\$robotsPath, \$robotsContent);
             file_put_contents(\$indexNowPath, \$indexNowKey);
             
-            echo '      ✓ Generated sitemap.xml (' . count(\$entries) . ' routes) + sitemap-network.xml (10 RaggieSoft hosts).' . PHP_EOL;
+            echo '      ✓ Generated sitemap.xml (' . count(\$entries) . ' routes) + sitemap-network.xml (11 RaggieSoft hosts).' . PHP_EOL;
             echo '      ✓ Generated robots.txt + IndexNow key (' . \$indexNowKey . '.txt).' . PHP_EOL;
         "
     )
@@ -786,6 +788,7 @@ function submit_indexnow_pings() {
         "$CORPORATE_ROOT/dist"
         "$STORETRAINER_ROOT/dist"
         "$BACKSTAGE_ROOT/dist"
+        "$CEDARRUN_ROOT/dist"
         "$NEBULAE_ROOT"
         "$LORE_ROOT/out"
         "$PORTFOLIO_ROOT/dist/raggiesoft-portfolio/browser"
@@ -933,6 +936,13 @@ function do_pull() {
     fi
     if [ -d "$BACKSTAGE_ROOT/.git" ] && (cd "$BACKSTAGE_ROOT" && git remote get-url origin &>/dev/null); then
         cd "$BACKSTAGE_ROOT" && git pull origin main
+    fi
+    if [ ! -d "$CEDARRUN_ROOT" ]; then
+        echo "      > Repository missing. Cloning raggiesoft-cedar-run from GitHub..."
+        mkdir -p "$(dirname "$CEDARRUN_ROOT")"
+        git clone https://github.com/raggiesoft/raggiesoft-cedar-run.git "$CEDARRUN_ROOT" 2>/dev/null || true
+    elif [ -d "$CEDARRUN_ROOT/.git" ] && (cd "$CEDARRUN_ROOT" && git remote get-url origin &>/dev/null); then
+        cd "$CEDARRUN_ROOT" && git pull origin main
     fi
 
     echo "   5.7 Checking Executive Systems Architect Dossier (michaelpragsdale.com/www)..."
@@ -1547,6 +1557,34 @@ function do_push() {
                 echo "      ✓ Pending RaggieSoft Backstage code sent to GitHub."
             else
                 echo "      (RaggieSoft Backstage is clean and up to date.)"
+            fi
+        fi
+    fi
+
+    # 4.995 CEDAR RUN LAUNCHPAD PUSH (`cedarrun.raggiesoft.com` — SolidJS + TypeScript + Vite Static SSG)
+    if [ -d "$CEDARRUN_ROOT" ] && [ -f "$CEDARRUN_ROOT/package.json" ]; then
+        echo "   -> Packaging Cedar Run Wilderness Launchpad (cedarrun.raggiesoft.com)..."
+        cd "$CEDARRUN_ROOT"
+        run_non_interactive_npm run build
+        if [ $? -ne 0 ]; then
+            echo "🛑 JENNA: ABORTING! SolidJS SSG build failed in cedarrun.raggiesoft.com."
+            exit 1
+        fi
+        if [ -d "$CEDARRUN_ROOT/.git" ]; then
+            git add -A
+            if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
+                git commit -m "$COMMIT_MSG"
+                if git remote get-url origin &>/dev/null; then
+                    git push -u $FORCE_FLAG origin main
+                    echo "      ✓ Cedar Run Launchpad committed and sent to GitHub."
+                else
+                    echo "      ✓ Cedar Run Launchpad committed locally (awaiting GitHub 'origin' remote)."
+                fi
+            elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
+                git push -u $FORCE_FLAG origin main
+                echo "      ✓ Pending Cedar Run Launchpad code sent to GitHub."
+            else
+                echo "      (Cedar Run Launchpad is clean and up to date.)"
             fi
         fi
     fi

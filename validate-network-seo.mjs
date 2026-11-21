@@ -10,8 +10,8 @@
  *   (`import ... from 'node:fs'`) instead of older CommonJS (`require('fs')`).
  *
  *   Think of `validate-network-seo.mjs` as our automated quality-assurance
- *   inspector for search engines and cross-site hyperlinks across ALL 11
- *   RaggieSoft websites (`raggiesoft.com`, 9 `*.raggiesoft.com` subdomains,
+ *   inspector for search engines and cross-site hyperlinks across ALL 12
+ *   RaggieSoft websites (`raggiesoft.com`, 10 `*.raggiesoft.com` subdomains,
  *   and `michaelpragsdale.com`):
  *     1. Checks that every property has `robots.txt` pointing to `sitemap.xml`,
  *        a valid `sitemap.xml` with `<lastmod>` dates, and our IndexNow API key
@@ -39,7 +39,8 @@
  *   8. https://backstage.raggiesoft.com    (/raggiesoft.com/subdomains/backstage)
  *   9. https://lore.raggiesoft.com         (/raggiesoft.com/subdomains/lore)
  *  10. https://nebulae.raggiesoft.com      (/raggiesoft.com/subdomains/nebulae)
- *  11. https://michaelpragsdale.com        (/michaelpragsdale.com/www)
+ *  11. https://cedarrun.raggiesoft.com     (/raggiesoft.com/subdomains/cedarrun)
+ *  12. https://michaelpragsdale.com        (/michaelpragsdale.com/www)
  * ============================================================================
  */
 
@@ -162,6 +163,12 @@ const properties = [
     domain: 'backstage.raggiesoft.com',
     origin: 'https://backstage.raggiesoft.com',
     webDir: path.join(serversRoot, 'raggiesoft.com/subdomains/backstage/dist'),
+    requireStatic404: true
+  },
+  {
+    domain: 'cedarrun.raggiesoft.com',
+    origin: 'https://cedarrun.raggiesoft.com',
+    webDir: path.join(serversRoot, 'raggiesoft.com/subdomains/cedarrun/dist'),
     requireStatic404: true
   },
   {
@@ -392,5 +399,5 @@ if (errors > 0) {
 }
 
 console.log(
-  `\n🚀 Network SEO Validation PASSED! (${totalSitemapUrls.toLocaleString()} total canonical URLs indexed across 11 RaggieSoft properties).`
+  `\n🚀 Network SEO Validation PASSED! (${totalSitemapUrls.toLocaleString()} total canonical URLs indexed across 12 RaggieSoft properties).`
 );
