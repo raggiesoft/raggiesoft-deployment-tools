@@ -158,11 +158,13 @@ CROSSROADS_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/crossroads"
 WAYSTATION_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/waystation"
 JESSICA_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/jessica"
 LAUNCHER_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/launcher"
+A11Y_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/a11y"
 PORTFOLIO_ROOT="$SERVER_ROOT/michaelpragsdale.com/www"
 DEPLOYMENT_TOOLS_ROOT="$WORKSPACE_DIR"
 NGINX_CONFIG_ROOT="$SERVER_ROOT/nginx-config"
 DESKTOP_APPS_ROOT="$PARENT_ROOT/desktop-apps"
 DESKTOP_STORETRAINER_ROOT="$DESKTOP_APPS_ROOT/storetrainer"
+DESKTOP_A11Y_STUDIO_ROOT="$DESKTOP_APPS_ROOT/accessibility-studio"
 LOGS_DIR="$WORKSPACE_DIR/logs"
 
 # ============================================================================
@@ -712,6 +714,7 @@ function generate_sitemap() {
             \$networkHosts = [
                 'https://raggiesoft.com/sitemap.xml',
                 'https://launcher.raggiesoft.com/sitemap.xml',
+                'https://a11y.raggiesoft.com/sitemap.xml',
                 'https://books.raggiesoft.com/sitemap.xml',
                 'https://crossroads.raggiesoft.com/sitemap.xml',
                 'https://cedarrun.raggiesoft.com/sitemap.xml',
@@ -802,6 +805,7 @@ function submit_indexnow_pings() {
         "$WAYSTATION_ROOT/dist"
         "$JESSICA_ROOT/dist"
         "$LAUNCHER_ROOT/dist"
+        "$A11Y_ROOT/dist"
         "$NEBULAE_ROOT"
         "$LORE_ROOT/out"
         "$PORTFOLIO_ROOT/dist/raggiesoft-portfolio/browser"
@@ -1771,6 +1775,42 @@ function do_push() {
         fi
     fi
 
+    # 4.9995 RAGGIESOFT ACCESSIBILITY STUDIO PUSH (`a11y.raggiesoft.com` — IBM Carbon Web Components + TypeScript + Vite Static SSG)
+    if [ -d "$A11Y_ROOT" ] && [ -f "$A11Y_ROOT/package.json" ]; then
+        echo "   -> Packaging RaggieSoft Accessibility Studio Portal (a11y.raggiesoft.com)..."
+        cd "$A11Y_ROOT"
+        if [ ! -d "$A11Y_ROOT/node_modules" ]; then
+            echo "      > Installing IBM Carbon Web Components + Styles + TypeScript + Vite dependencies non-interactively..."
+            run_non_interactive_npm install
+            if [ $? -ne 0 ]; then
+                echo "🛑 JENNA: ABORTING! npm install failed in a11y.raggiesoft.com."
+                exit 1
+            fi
+        fi
+        run_non_interactive_npm run build
+        if [ $? -ne 0 ]; then
+            echo "🛑 JENNA: ABORTING! IBM Carbon SSG build failed in a11y.raggiesoft.com."
+            exit 1
+        fi
+        if [ -d "$A11Y_ROOT/.git" ]; then
+            git add -A
+            if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
+                git commit -m "$COMMIT_MSG"
+                if git remote get-url origin &>/dev/null; then
+                    git push -u $FORCE_FLAG origin main
+                    echo "      ✓ RaggieSoft Accessibility Studio Portal committed and sent to GitHub."
+                else
+                    echo "      ✓ RaggieSoft Accessibility Studio Portal committed locally (awaiting GitHub 'origin' remote)."
+                fi
+            elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
+                git push -u $FORCE_FLAG origin main
+                echo "      ✓ Pending RaggieSoft Accessibility Studio Portal code sent to GitHub."
+            else
+                echo "      (RaggieSoft Accessibility Studio Portal is clean and up to date.)"
+            fi
+        fi
+    fi
+
 
     # 4.10 PORTFOLIO PUSH (`michaelpragsdale.com` — Angular 19 Zoneless Build)
     echo "   -> Packaging Executive Systems Architect Dossier (michaelpragsdale.com)..."
@@ -1909,6 +1949,45 @@ function do_push() {
             echo "      ✓ Pending StoreTrainer Desktop commits sent to GitHub."
         else
             echo "      (StoreTrainer Desktop repo is clean and up to date.)"
+        fi
+    fi
+
+    # 4.14 DESKTOP ACCESSIBILITY STUDIO IDE REPOSITORY PUSH (`/desktop-apps/accessibility-studio` -> github.com/raggiesoft/accessibility-studio)
+    echo "   -> Packaging RaggieSoft Accessibility Studio IDE Repository (/desktop-apps/accessibility-studio)..."
+    if [ -d "$DESKTOP_A11Y_STUDIO_ROOT/.git" ]; then
+        cd "$DESKTOP_A11Y_STUDIO_ROOT"
+        if [ -f "$DESKTOP_A11Y_STUDIO_ROOT/RaggieSoftAccessibilityStudio.slnx" ]; then
+            if command -v dotnet &>/dev/null; then
+                DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 dotnet build "$DESKTOP_A11Y_STUDIO_ROOT/RaggieSoftAccessibilityStudio.slnx" --disable-build-servers --verbosity quiet
+                if [ $? -ne 0 ]; then
+                    echo "🛑 JENNA: ABORTING! RaggieSoft Accessibility Studio .NET 10 build failed."
+                    exit 1
+                fi
+            elif [ -x "/opt/homebrew/bin/dotnet" ]; then
+                DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 /opt/homebrew/bin/dotnet build "$DESKTOP_A11Y_STUDIO_ROOT/RaggieSoftAccessibilityStudio.slnx" --disable-build-servers --verbosity quiet
+                if [ $? -ne 0 ]; then
+                    echo "🛑 JENNA: ABORTING! RaggieSoft Accessibility Studio .NET 10 build failed."
+                    exit 1
+                fi
+            fi
+        fi
+
+        git add -A
+
+        if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
+            git commit -m "$COMMIT_MSG"
+            if git remote get-url origin &>/dev/null; then
+                git push -u $FORCE_FLAG origin main
+                echo "      ✓ Accessibility Studio IDE repo committed and sent to GitHub."
+            else
+                echo "      ✓ Accessibility Studio IDE repo committed locally."
+            fi
+        elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
+            echo "      ⚠️  Found pending Accessibility Studio IDE commits. Pushing now..."
+            git push -u $FORCE_FLAG origin main
+            echo "      ✓ Pending Accessibility Studio IDE commits sent to GitHub."
+        else
+            echo "      (Accessibility Studio IDE repo is clean and up to date.)"
         fi
     fi
 
