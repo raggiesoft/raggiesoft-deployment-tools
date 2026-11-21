@@ -66,6 +66,19 @@ if [ "$EUID" -eq 0 ]; then
     exit 1
 fi
 
+# NON-BLOCKING SINGLE-INSTANCE MUTEX (`flock -n`):
+# Prevents `sarah.timer` (every 5 min) and `jenna-sync.sh`'s SSH wakeup from ever running
+# two overlapping deployments at the same time! Note: preserved across self-upgrade `exec`
+# via `SARAH_LOCK_HELD=1` so re-execing Sarah inherits file descriptor 9 cleanly.
+if command -v flock >/dev/null 2>&1 && [ "${SARAH_LOCK_HELD:-0}" != "1" ]; then
+    exec 9>/tmp/sarah-deploy.lock
+    if ! flock -n 9; then
+        echo "ℹ️  SARAH: Another deployment is already running; skipping overlapping run."
+        exit 0
+    fi
+    export SARAH_LOCK_HELD=1
+fi
+
 # Save original CLI flags (`"$@"`) into a Bash array so if Sarah pulls an updated version
 # of `sarah-deploy.sh` during Step 0, `exec` can pass the exact same flags (`--force-reset`) along!
 SARAH_ORIG_ARGS=("$@")
@@ -557,8 +570,8 @@ def compact_inter_tag_whitespace(chunk: str) -> str:
     return chunk
 
 
-def minify_html_fragment(html: str, node_bin: str | None = None, tmp_dir: Path | None = None) -> str:
-    """Single-pass HTML5-tokenizer-safe minifier preserving SSR hydration markers."""
+def minify_html_fragment(html: str) -> str:
+    """Single-pass HTML5-tokenizer-safe minifier preserving SSR hydration markers & inline scripts (zero subprocesses)."""
     out = []
     pos = 0
     for m in HTML_TOKEN_RE.finditer(html):
@@ -593,27 +606,9 @@ def minify_html_fragment(html: str, node_bin: str | None = None, tmp_dir: Path |
                     continue
                 except Exception:
                     pass
-            elif "src=" not in low_attrs and (
-                "type=" not in low_attrs
-                or "javascript" in low_attrs
-                or 'type="module"' in low_attrs
-                or "type='module'" in low_attrs
-            ):
-                if body.strip() and ("//" in body or "/*" in body):
-                    candidate = strip_js_comments(body).strip()
-                    ok = True
-                    if node_bin and tmp_dir:
-                        chk_file = tmp_dir / ".sarah_inline_chk.mjs"
-                        try:
-                            chk_file.write_text(candidate, encoding="utf-8")
-                            chk = subprocess.run([node_bin, "--check", str(chk_file)], capture_output=True)
-                            ok = chk.returncode == 0
-                        finally:
-                            chk_file.unlink(missing_ok=True)
-                    if ok:
-                        out.append(f"<script{attrs}>{candidate}</script>")
-                        continue
 
+        # Executable inline `<script>`, `<pre>`, `<code>`, and `<textarea>` stay 100% verbatim
+        # (fast in-memory pass—zero `node --check` subprocesses across thousands of SSG pages!)
         out.append(full)
 
     if pos < len(html):
@@ -763,7 +758,7 @@ def main() -> None:
                 elif low.endswith(".html"):
                     raw = fpath.read_text(encoding="utf-8")
                     b0 = len(raw.encode("utf-8"))
-                    minified = minify_html_fragment(raw, node_bin, fpath.parent)
+                    minified = minify_html_fragment(raw)
                     b1 = len(minified.encode("utf-8"))
                     if b1 < b0:
                         fpath.write_text(minified, encoding="utf-8")
