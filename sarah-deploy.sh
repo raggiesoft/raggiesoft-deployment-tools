@@ -1144,6 +1144,10 @@ deploy_site "Cedar Run" "/home/michael/raggiesoft-cedar-run" "/var/www/cedarrun.
 # 13. PROCESS RAGGIESOFT STORY CROSSROADS (`crossroads.raggiesoft.com` — Eleventy v3 + Lit 3 + TypeScript SSG `/dist`)
 deploy_site "Story Crossroads" "/home/michael/raggiesoft-crossroads" "/var/www/crossroads.raggiesoft.com" "/home/michael/raggiesoft-crossroads/dist"
 
+# 14. PROCESS THE UNCHARTED WAYSTATION (`waystation.raggiesoft.com` + Default 404 Catch-All — Mithril.js + TS SSG `/dist`)
+deploy_site "Waystation" "/home/michael/raggiesoft-waystation" "/var/www/waystation.raggiesoft.com" "/home/michael/raggiesoft-waystation/dist"
+
+
 
 
 

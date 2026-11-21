@@ -155,6 +155,7 @@ STORETRAINER_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/storetrainer"
 BACKSTAGE_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/backstage"
 CEDARRUN_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/cedarrun"
 CROSSROADS_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/crossroads"
+WAYSTATION_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/waystation"
 PORTFOLIO_ROOT="$SERVER_ROOT/michaelpragsdale.com/www"
 DEPLOYMENT_TOOLS_ROOT="$WORKSPACE_DIR"
 NGINX_CONFIG_ROOT="$SERVER_ROOT/nginx-config"
@@ -701,7 +702,7 @@ function generate_sitemap() {
             file_put_contents(\$sitemapPath, \$xml);
 
             // Also generate a Domain-Property Master Sitemap Index (sitemap-network.xml)
-            // referencing raggiesoft.com + all 11 *.raggiesoft.com subdomain sitemaps
+            // referencing raggiesoft.com + all 12 *.raggiesoft.com subdomain sitemaps
             // while keeping sitemap.xml pure single-host for strict crawler parsers.
             \$networkSitemapPath = \$hubRoot . '/sitemap-network.xml';
             \$networkHosts = [
@@ -709,6 +710,7 @@ function generate_sitemap() {
                 'https://books.raggiesoft.com/sitemap.xml',
                 'https://crossroads.raggiesoft.com/sitemap.xml',
                 'https://cedarrun.raggiesoft.com/sitemap.xml',
+                'https://waystation.raggiesoft.com/sitemap.xml',
                 'https://music.raggiesoft.com/sitemap.xml',
                 'https://lore.raggiesoft.com/sitemap.xml',
                 'https://engineroom.raggiesoft.com/sitemap.xml',
@@ -742,7 +744,7 @@ function generate_sitemap() {
             file_put_contents(\$robotsPath, \$robotsContent);
             file_put_contents(\$indexNowPath, \$indexNowKey);
             
-            echo '      ✓ Generated sitemap.xml (' . count(\$entries) . ' routes) + sitemap-network.xml (12 RaggieSoft hosts).' . PHP_EOL;
+            echo '      ✓ Generated sitemap.xml (' . count(\$entries) . ' routes) + sitemap-network.xml (13 RaggieSoft hosts).' . PHP_EOL;
             echo '      ✓ Generated robots.txt + IndexNow key (' . \$indexNowKey . '.txt).' . PHP_EOL;
         "
     )
@@ -792,6 +794,7 @@ function submit_indexnow_pings() {
         "$BACKSTAGE_ROOT/dist"
         "$CEDARRUN_ROOT/dist"
         "$CROSSROADS_ROOT/dist"
+        "$WAYSTATION_ROOT/dist"
         "$NEBULAE_ROOT"
         "$LORE_ROOT/out"
         "$PORTFOLIO_ROOT/dist/raggiesoft-portfolio/browser"
@@ -953,6 +956,13 @@ function do_pull() {
         git clone https://github.com/raggiesoft/raggiesoft-crossroads.git "$CROSSROADS_ROOT" 2>/dev/null || true
     elif [ -d "$CROSSROADS_ROOT/.git" ] && (cd "$CROSSROADS_ROOT" && git remote get-url origin &>/dev/null); then
         cd "$CROSSROADS_ROOT" && git pull origin main
+    fi
+    if [ ! -d "$WAYSTATION_ROOT" ]; then
+        echo "      > Repository missing. Cloning raggiesoft-waystation from GitHub..."
+        mkdir -p "$(dirname "$WAYSTATION_ROOT")"
+        git clone https://github.com/raggiesoft/raggiesoft-waystation.git "$WAYSTATION_ROOT" 2>/dev/null || true
+    elif [ -d "$WAYSTATION_ROOT/.git" ] && (cd "$WAYSTATION_ROOT" && git remote get-url origin &>/dev/null); then
+        cd "$WAYSTATION_ROOT" && git pull origin main
     fi
 
     echo "   5.7 Checking Executive Systems Architect Dossier (michaelpragsdale.com/www)..."
@@ -1627,6 +1637,38 @@ function do_push() {
                 echo "      ✓ Pending Story Crossroads code sent to GitHub."
             else
                 echo "      (Story Crossroads is clean and up to date.)"
+            fi
+        fi
+    fi
+
+    # 4.997 UNCHARTED WAYSTATION PUSH (`waystation.raggiesoft.com` — Mithril.js + TypeScript Hyperscript SSG)
+    if [ -d "$WAYSTATION_ROOT" ] && [ -f "$WAYSTATION_ROOT/package.json" ]; then
+        echo "   -> Packaging The Uncharted Waystation (waystation.raggiesoft.com)..."
+        cd "$WAYSTATION_ROOT"
+        if [ ! -d "$WAYSTATION_ROOT/node_modules" ]; then
+            echo "      > Installing Mithril.js + TypeScript dependencies non-interactively..."
+            run_non_interactive_npm install
+        fi
+        run_non_interactive_npm run build
+        if [ $? -ne 0 ]; then
+            echo "🛑 JENNA: ABORTING! Mithril.js SSG build failed in waystation.raggiesoft.com."
+            exit 1
+        fi
+        if [ -d "$WAYSTATION_ROOT/.git" ]; then
+            git add -A
+            if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
+                git commit -m "$COMMIT_MSG"
+                if git remote get-url origin &>/dev/null; then
+                    git push -u $FORCE_FLAG origin main
+                    echo "      ✓ Uncharted Waystation committed and sent to GitHub."
+                else
+                    echo "      ✓ Uncharted Waystation committed locally (awaiting GitHub 'origin' remote)."
+                fi
+            elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
+                git push -u $FORCE_FLAG origin main
+                echo "      ✓ Pending Uncharted Waystation code sent to GitHub."
+            else
+                echo "      (Uncharted Waystation is clean and up to date.)"
             fi
         fi
     fi

@@ -10,8 +10,8 @@
  *   (`import ... from 'node:fs'`) instead of older CommonJS (`require('fs')`).
  *
  *   Think of `validate-network-seo.mjs` as our automated quality-assurance
- *   inspector for search engines and cross-site hyperlinks across ALL 13
- *   RaggieSoft websites (`raggiesoft.com`, 11 `*.raggiesoft.com` subdomains,
+ *   inspector for search engines and cross-site hyperlinks across ALL 14
+ *   RaggieSoft websites (`raggiesoft.com`, 12 `*.raggiesoft.com` subdomains,
  *   and `michaelpragsdale.com`):
  *     1. Checks that every property has `robots.txt` pointing to `sitemap.xml`,
  *        a valid `sitemap.xml` with `<lastmod>` dates, and our IndexNow API key
@@ -41,7 +41,8 @@
  *  10. https://nebulae.raggiesoft.com      (/raggiesoft.com/subdomains/nebulae)
  *  11. https://cedarrun.raggiesoft.com     (/raggiesoft.com/subdomains/cedarrun)
  *  12. https://crossroads.raggiesoft.com   (/raggiesoft.com/subdomains/crossroads)
- *  13. https://michaelpragsdale.com        (/michaelpragsdale.com/www)
+ *  13. https://waystation.raggiesoft.com   (/raggiesoft.com/subdomains/waystation)
+ *  14. https://michaelpragsdale.com        (/michaelpragsdale.com/www)
  * ============================================================================
  */
 
@@ -176,6 +177,12 @@ const properties = [
     domain: 'crossroads.raggiesoft.com',
     origin: 'https://crossroads.raggiesoft.com',
     webDir: path.join(serversRoot, 'raggiesoft.com/subdomains/crossroads/dist'),
+    requireStatic404: true
+  },
+  {
+    domain: 'waystation.raggiesoft.com',
+    origin: 'https://waystation.raggiesoft.com',
+    webDir: path.join(serversRoot, 'raggiesoft.com/subdomains/waystation/dist'),
     requireStatic404: true
   },
   {
@@ -406,5 +413,5 @@ if (errors > 0) {
 }
 
 console.log(
-  `\n🚀 Network SEO Validation PASSED! (${totalSitemapUrls.toLocaleString()} total canonical URLs indexed across 13 RaggieSoft properties).`
+  `\n🚀 Network SEO Validation PASSED! (${totalSitemapUrls.toLocaleString()} total canonical URLs indexed across 14 RaggieSoft properties).`
 );
