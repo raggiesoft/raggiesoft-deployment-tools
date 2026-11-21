@@ -1141,5 +1141,9 @@ deploy_site "Backstage" "/home/michael/raggiesoft-backstage" "/var/www/backstage
 # 12. PROCESS CEDAR RUN LAUNCHPAD (`cedarrun.raggiesoft.com` — SolidJS + TypeScript + Vite Static SSG `/dist`)
 deploy_site "Cedar Run" "/home/michael/raggiesoft-cedar-run" "/var/www/cedarrun.raggiesoft.com" "/home/michael/raggiesoft-cedar-run/dist"
 
+# 13. PROCESS RAGGIESOFT STORY CROSSROADS (`crossroads.raggiesoft.com` — Eleventy v3 + Lit 3 + TypeScript SSG `/dist`)
+deploy_site "Story Crossroads" "/home/michael/raggiesoft-crossroads" "/var/www/crossroads.raggiesoft.com" "/home/michael/raggiesoft-crossroads/dist"
+
+
 
 

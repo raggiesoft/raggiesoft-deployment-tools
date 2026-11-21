@@ -10,8 +10,8 @@
  *   (`import ... from 'node:fs'`) instead of older CommonJS (`require('fs')`).
  *
  *   Think of `validate-network-seo.mjs` as our automated quality-assurance
- *   inspector for search engines and cross-site hyperlinks across ALL 12
- *   RaggieSoft websites (`raggiesoft.com`, 10 `*.raggiesoft.com` subdomains,
+ *   inspector for search engines and cross-site hyperlinks across ALL 13
+ *   RaggieSoft websites (`raggiesoft.com`, 11 `*.raggiesoft.com` subdomains,
  *   and `michaelpragsdale.com`):
  *     1. Checks that every property has `robots.txt` pointing to `sitemap.xml`,
  *        a valid `sitemap.xml` with `<lastmod>` dates, and our IndexNow API key
@@ -40,7 +40,8 @@
  *   9. https://lore.raggiesoft.com         (/raggiesoft.com/subdomains/lore)
  *  10. https://nebulae.raggiesoft.com      (/raggiesoft.com/subdomains/nebulae)
  *  11. https://cedarrun.raggiesoft.com     (/raggiesoft.com/subdomains/cedarrun)
- *  12. https://michaelpragsdale.com        (/michaelpragsdale.com/www)
+ *  12. https://crossroads.raggiesoft.com   (/raggiesoft.com/subdomains/crossroads)
+ *  13. https://michaelpragsdale.com        (/michaelpragsdale.com/www)
  * ============================================================================
  */
 
@@ -169,6 +170,12 @@ const properties = [
     domain: 'cedarrun.raggiesoft.com',
     origin: 'https://cedarrun.raggiesoft.com',
     webDir: path.join(serversRoot, 'raggiesoft.com/subdomains/cedarrun/dist'),
+    requireStatic404: true
+  },
+  {
+    domain: 'crossroads.raggiesoft.com',
+    origin: 'https://crossroads.raggiesoft.com',
+    webDir: path.join(serversRoot, 'raggiesoft.com/subdomains/crossroads/dist'),
     requireStatic404: true
   },
   {
@@ -399,5 +406,5 @@ if (errors > 0) {
 }
 
 console.log(
-  `\n🚀 Network SEO Validation PASSED! (${totalSitemapUrls.toLocaleString()} total canonical URLs indexed across 12 RaggieSoft properties).`
+  `\n🚀 Network SEO Validation PASSED! (${totalSitemapUrls.toLocaleString()} total canonical URLs indexed across 13 RaggieSoft properties).`
 );

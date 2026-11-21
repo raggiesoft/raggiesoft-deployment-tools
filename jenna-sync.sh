@@ -154,6 +154,7 @@ CORPORATE_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/corporate"
 STORETRAINER_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/storetrainer"
 BACKSTAGE_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/backstage"
 CEDARRUN_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/cedarrun"
+CROSSROADS_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/crossroads"
 PORTFOLIO_ROOT="$SERVER_ROOT/michaelpragsdale.com/www"
 DEPLOYMENT_TOOLS_ROOT="$WORKSPACE_DIR"
 NGINX_CONFIG_ROOT="$SERVER_ROOT/nginx-config"
@@ -700,12 +701,13 @@ function generate_sitemap() {
             file_put_contents(\$sitemapPath, \$xml);
 
             // Also generate a Domain-Property Master Sitemap Index (sitemap-network.xml)
-            // referencing raggiesoft.com + all 10 *.raggiesoft.com subdomain sitemaps
+            // referencing raggiesoft.com + all 11 *.raggiesoft.com subdomain sitemaps
             // while keeping sitemap.xml pure single-host for strict crawler parsers.
             \$networkSitemapPath = \$hubRoot . '/sitemap-network.xml';
             \$networkHosts = [
                 'https://raggiesoft.com/sitemap.xml',
                 'https://books.raggiesoft.com/sitemap.xml',
+                'https://crossroads.raggiesoft.com/sitemap.xml',
                 'https://cedarrun.raggiesoft.com/sitemap.xml',
                 'https://music.raggiesoft.com/sitemap.xml',
                 'https://lore.raggiesoft.com/sitemap.xml',
@@ -740,7 +742,7 @@ function generate_sitemap() {
             file_put_contents(\$robotsPath, \$robotsContent);
             file_put_contents(\$indexNowPath, \$indexNowKey);
             
-            echo '      ✓ Generated sitemap.xml (' . count(\$entries) . ' routes) + sitemap-network.xml (11 RaggieSoft hosts).' . PHP_EOL;
+            echo '      ✓ Generated sitemap.xml (' . count(\$entries) . ' routes) + sitemap-network.xml (12 RaggieSoft hosts).' . PHP_EOL;
             echo '      ✓ Generated robots.txt + IndexNow key (' . \$indexNowKey . '.txt).' . PHP_EOL;
         "
     )
@@ -789,6 +791,7 @@ function submit_indexnow_pings() {
         "$STORETRAINER_ROOT/dist"
         "$BACKSTAGE_ROOT/dist"
         "$CEDARRUN_ROOT/dist"
+        "$CROSSROADS_ROOT/dist"
         "$NEBULAE_ROOT"
         "$LORE_ROOT/out"
         "$PORTFOLIO_ROOT/dist/raggiesoft-portfolio/browser"
@@ -943,6 +946,13 @@ function do_pull() {
         git clone https://github.com/raggiesoft/raggiesoft-cedar-run.git "$CEDARRUN_ROOT" 2>/dev/null || true
     elif [ -d "$CEDARRUN_ROOT/.git" ] && (cd "$CEDARRUN_ROOT" && git remote get-url origin &>/dev/null); then
         cd "$CEDARRUN_ROOT" && git pull origin main
+    fi
+    if [ ! -d "$CROSSROADS_ROOT" ]; then
+        echo "      > Repository missing. Cloning raggiesoft-crossroads from GitHub..."
+        mkdir -p "$(dirname "$CROSSROADS_ROOT")"
+        git clone https://github.com/raggiesoft/raggiesoft-crossroads.git "$CROSSROADS_ROOT" 2>/dev/null || true
+    elif [ -d "$CROSSROADS_ROOT/.git" ] && (cd "$CROSSROADS_ROOT" && git remote get-url origin &>/dev/null); then
+        cd "$CROSSROADS_ROOT" && git pull origin main
     fi
 
     echo "   5.7 Checking Executive Systems Architect Dossier (michaelpragsdale.com/www)..."
@@ -1585,6 +1595,38 @@ function do_push() {
                 echo "      ✓ Pending Cedar Run Launchpad code sent to GitHub."
             else
                 echo "      (Cedar Run Launchpad is clean and up to date.)"
+            fi
+        fi
+    fi
+
+    # 4.996 RAGGIESOFT STORY CROSSROADS PUSH (`crossroads.raggiesoft.com` — Eleventy v3 + Lit 3 + TypeScript SSG)
+    if [ -d "$CROSSROADS_ROOT" ] && [ -f "$CROSSROADS_ROOT/package.json" ]; then
+        echo "   -> Packaging RaggieSoft Story Crossroads (crossroads.raggiesoft.com)..."
+        cd "$CROSSROADS_ROOT"
+        if [ ! -d "$CROSSROADS_ROOT/node_modules" ]; then
+            echo "      > Installing Eleventy v3 + Lit 3 dependencies non-interactively..."
+            run_non_interactive_npm install
+        fi
+        run_non_interactive_npm run build
+        if [ $? -ne 0 ]; then
+            echo "🛑 JENNA: ABORTING! Eleventy v3 + Lit 3 SSG build failed in crossroads.raggiesoft.com."
+            exit 1
+        fi
+        if [ -d "$CROSSROADS_ROOT/.git" ]; then
+            git add -A
+            if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
+                git commit -m "$COMMIT_MSG"
+                if git remote get-url origin &>/dev/null; then
+                    git push -u $FORCE_FLAG origin main
+                    echo "      ✓ Story Crossroads committed and sent to GitHub."
+                else
+                    echo "      ✓ Story Crossroads committed locally (awaiting GitHub 'origin' remote)."
+                fi
+            elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
+                git push -u $FORCE_FLAG origin main
+                echo "      ✓ Pending Story Crossroads code sent to GitHub."
+            else
+                echo "      (Story Crossroads is clean and up to date.)"
             fi
         fi
     fi
