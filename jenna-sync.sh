@@ -1995,7 +1995,10 @@ function do_push() {
                 # Cross-OS Parallels Guard: Re-run NuGet restore automatically if Visual Studio on Windows
                 # wrote `C:\Program Files (x86)\...` into the shared workspace's `obj/project.assets.json`!
                 local A11Y_NORESTORE=""
-                if [ -f "$DESKTOP_A11Y_STUDIO_ROOT/src/AccessibilityStudio.WinForms/obj/project.assets.json" ] && ! grep -q 'C:\\' "$DESKTOP_A11Y_STUDIO_ROOT/src/AccessibilityStudio.WinForms/obj/project.assets.json" 2>/dev/null; then
+                if [ -f "$DESKTOP_A11Y_STUDIO_ROOT/src/AccessibilityStudio.WinForms/obj/project.assets.json" ] && \
+                   [ -f "$DESKTOP_A11Y_STUDIO_ROOT/src/RaggieSoft.HelpViewer/obj/project.assets.json" ] && \
+                   ! grep -q 'C:\\' "$DESKTOP_A11Y_STUDIO_ROOT/src/AccessibilityStudio.WinForms/obj/project.assets.json" 2>/dev/null && \
+                   ! grep -q 'C:\\' "$DESKTOP_A11Y_STUDIO_ROOT/src/RaggieSoft.HelpViewer/obj/project.assets.json" 2>/dev/null; then
                     A11Y_NORESTORE="--no-restore"
                 fi
                 DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 "$DOTNET_BIN" build "$DESKTOP_A11Y_STUDIO_ROOT/RaggieSoftAccessibilityStudio.slnx" $A11Y_NORESTORE --disable-build-servers -p:NuGetAudit=false --verbosity quiet
