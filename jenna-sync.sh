@@ -156,6 +156,7 @@ BACKSTAGE_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/backstage"
 CEDARRUN_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/cedarrun"
 CROSSROADS_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/crossroads"
 WAYSTATION_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/waystation"
+JESSICA_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/jessica"
 PORTFOLIO_ROOT="$SERVER_ROOT/michaelpragsdale.com/www"
 DEPLOYMENT_TOOLS_ROOT="$WORKSPACE_DIR"
 NGINX_CONFIG_ROOT="$SERVER_ROOT/nginx-config"
@@ -711,6 +712,7 @@ function generate_sitemap() {
                 'https://crossroads.raggiesoft.com/sitemap.xml',
                 'https://cedarrun.raggiesoft.com/sitemap.xml',
                 'https://waystation.raggiesoft.com/sitemap.xml',
+                'https://jessica.raggiesoft.com/sitemap.xml',
                 'https://music.raggiesoft.com/sitemap.xml',
                 'https://lore.raggiesoft.com/sitemap.xml',
                 'https://engineroom.raggiesoft.com/sitemap.xml',
@@ -753,24 +755,23 @@ function generate_sitemap() {
 # ============================================================================
 # Helper: trigger_remote_sarah_deploy
 # ============================================================================
-# Performs a 5-second non-interactive SSH pre-flight check to
-# `michael@jessica.raggiesoft.com`. When reachable, triggers `/home/michael/sarah-deploy.sh`
-# immediately so newly pushed GitHub commits, self-upgrading Sarah script updates,
-# and validated Nginx `.conf` updates deploy live in seconds rather than waiting
-# up to 5 minutes for `sarah.timer`. If outbound SSH port 22 is blocked on a
-# restricted WiFi network, cleanly skips without failing the build (`sarah.timer`
-# on the Droplet still pulls within 5 minutes).
+# Performs a 5-second non-interactive SSH pre-flight check directly to the NYC1
+# Droplet IPv4 (`michael@142.93.244.239`, since `jessica.raggiesoft.com` is now an
+# Orange-Cloud proxied web property on Cloudflare!). When reachable, triggers
+# `/home/michael/sarah-deploy.sh` immediately so newly pushed GitHub commits,
+# self-upgrading Sarah script updates, and validated Nginx `.conf` updates deploy
+# live in seconds rather than waiting up to 5 minutes for `sarah.timer`.
 function trigger_remote_sarah_deploy() {
-    echo "👱‍♀️ JENNA: Checking SSH link to jessica.raggiesoft.com for instant Sarah wakeup..."
-    if run_with_timeout 5 ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=4 michael@jessica.raggiesoft.com true >/dev/null 2>&1; then
-        echo "      ✓ Connected to jessica.raggiesoft.com! Waking Sarah for immediate live deployment..."
-        if run_with_timeout 120 ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 michael@jessica.raggiesoft.com '/home/michael/sarah-deploy.sh'; then
+    echo "👱‍♀️ JENNA: Checking SSH link to NYC1 host (142.93.244.239) for instant Sarah wakeup..."
+    if run_with_timeout 5 ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=4 michael@142.93.244.239 true >/dev/null 2>&1; then
+        echo "      ✓ Connected to NYC1 host! Waking Sarah for immediate live deployment..."
+        if run_with_timeout 120 ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 michael@142.93.244.239 '/home/michael/sarah-deploy.sh'; then
             echo "      ✓ Sarah completed live server sync (web roots, scripts, and Nginx verified)."
         else
             echo "      ⚠️  Remote Sarah wakeup exited non-zero or timed out; sarah.timer will reconcile automatically."
         fi
     else
-        echo "      ℹ️  SSH port 22 unreachable on current network; sarah.timer on jessica.raggiesoft.com will pull within 5 minutes."
+        echo "      ℹ️  SSH port 22 unreachable on current network; sarah.timer on NYC1 will pull within 5 minutes."
     fi
 }
 
@@ -795,6 +796,7 @@ function submit_indexnow_pings() {
         "$CEDARRUN_ROOT/dist"
         "$CROSSROADS_ROOT/dist"
         "$WAYSTATION_ROOT/dist"
+        "$JESSICA_ROOT/dist"
         "$NEBULAE_ROOT"
         "$LORE_ROOT/out"
         "$PORTFOLIO_ROOT/dist/raggiesoft-portfolio/browser"
@@ -963,6 +965,13 @@ function do_pull() {
         git clone https://github.com/raggiesoft/raggiesoft-waystation.git "$WAYSTATION_ROOT" 2>/dev/null || true
     elif [ -d "$WAYSTATION_ROOT/.git" ] && (cd "$WAYSTATION_ROOT" && git remote get-url origin &>/dev/null); then
         cd "$WAYSTATION_ROOT" && git pull origin main
+    fi
+    if [ ! -d "$JESSICA_ROOT" ]; then
+        echo "      > Repository missing. Cloning raggiesoft-jessica from GitHub..."
+        mkdir -p "$(dirname "$JESSICA_ROOT")"
+        git clone https://github.com/raggiesoft/raggiesoft-jessica.git "$JESSICA_ROOT" 2>/dev/null || true
+    elif [ -d "$JESSICA_ROOT/.git" ] && (cd "$JESSICA_ROOT" && git remote get-url origin &>/dev/null); then
+        cd "$JESSICA_ROOT" && git pull origin main
     fi
 
     echo "   5.7 Checking Executive Systems Architect Dossier (michaelpragsdale.com/www)..."
@@ -1669,6 +1678,38 @@ function do_push() {
                 echo "      ✓ Pending Uncharted Waystation code sent to GitHub."
             else
                 echo "      (Uncharted Waystation is clean and up to date.)"
+            fi
+        fi
+    fi
+
+    # 4.998 JESSICA SANCTUARY GUIDE PUSH (`jessica.raggiesoft.com` — Preact 10 + Signals + TypeScript + Vite Static SSG)
+    if [ -d "$JESSICA_ROOT" ] && [ -f "$JESSICA_ROOT/package.json" ]; then
+        echo "   -> Packaging Jessica — Keeper of the House (jessica.raggiesoft.com)..."
+        cd "$JESSICA_ROOT"
+        if [ ! -d "$JESSICA_ROOT/node_modules" ]; then
+            echo "      > Installing Preact 10 + Signals + TypeScript dependencies non-interactively..."
+            run_non_interactive_npm install
+        fi
+        run_non_interactive_npm run build
+        if [ $? -ne 0 ]; then
+            echo "🛑 JENNA: ABORTING! Preact + Signals SSG build failed in jessica.raggiesoft.com."
+            exit 1
+        fi
+        if [ -d "$JESSICA_ROOT/.git" ]; then
+            git add -A
+            if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
+                git commit -m "$COMMIT_MSG"
+                if git remote get-url origin &>/dev/null; then
+                    git push -u $FORCE_FLAG origin main
+                    echo "      ✓ Jessica Sanctuary Guide committed and sent to GitHub."
+                else
+                    echo "      ✓ Jessica Sanctuary Guide committed locally (awaiting GitHub 'origin' remote)."
+                fi
+            elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
+                git push -u $FORCE_FLAG origin main
+                echo "      ✓ Pending Jessica Sanctuary Guide code sent to GitHub."
+            else
+                echo "      (Jessica Sanctuary Guide is clean and up to date.)"
             fi
         fi
     fi

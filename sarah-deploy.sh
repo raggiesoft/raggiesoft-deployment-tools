@@ -1147,6 +1147,9 @@ deploy_site "Story Crossroads" "/home/michael/raggiesoft-crossroads" "/var/www/c
 # 14. PROCESS THE UNCHARTED WAYSTATION (`waystation.raggiesoft.com` + Default 404 Catch-All — Mithril.js + TS SSG `/dist`)
 deploy_site "Waystation" "/home/michael/raggiesoft-waystation" "/var/www/waystation.raggiesoft.com" "/home/michael/raggiesoft-waystation/dist"
 
+# 15. PROCESS JESSICA SANCTUARY GUIDE (`jessica.raggiesoft.com` — Preact 10 + Signals + TS + Vite Static SSG `/dist`)
+deploy_site "Jessica" "/home/michael/raggiesoft-jessica" "/var/www/jessica.raggiesoft.com" "/home/michael/raggiesoft-jessica/dist"
+
 
 
 
