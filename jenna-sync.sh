@@ -157,6 +157,7 @@ CEDARRUN_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/cedarrun"
 CROSSROADS_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/crossroads"
 WAYSTATION_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/waystation"
 JESSICA_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/jessica"
+LAUNCHER_ROOT="$SERVER_ROOT/raggiesoft.com/subdomains/launcher"
 PORTFOLIO_ROOT="$SERVER_ROOT/michaelpragsdale.com/www"
 DEPLOYMENT_TOOLS_ROOT="$WORKSPACE_DIR"
 NGINX_CONFIG_ROOT="$SERVER_ROOT/nginx-config"
@@ -710,6 +711,7 @@ function generate_sitemap() {
             \$networkSitemapPath = \$hubRoot . '/sitemap-network.xml';
             \$networkHosts = [
                 'https://raggiesoft.com/sitemap.xml',
+                'https://launcher.raggiesoft.com/sitemap.xml',
                 'https://books.raggiesoft.com/sitemap.xml',
                 'https://crossroads.raggiesoft.com/sitemap.xml',
                 'https://cedarrun.raggiesoft.com/sitemap.xml',
@@ -799,6 +801,7 @@ function submit_indexnow_pings() {
         "$CROSSROADS_ROOT/dist"
         "$WAYSTATION_ROOT/dist"
         "$JESSICA_ROOT/dist"
+        "$LAUNCHER_ROOT/dist"
         "$NEBULAE_ROOT"
         "$LORE_ROOT/out"
         "$PORTFOLIO_ROOT/dist/raggiesoft-portfolio/browser"
@@ -974,6 +977,13 @@ function do_pull() {
         git clone https://github.com/raggiesoft/raggiesoft-jessica.git "$JESSICA_ROOT" 2>/dev/null || true
     elif [ -d "$JESSICA_ROOT/.git" ] && (cd "$JESSICA_ROOT" && git remote get-url origin &>/dev/null); then
         cd "$JESSICA_ROOT" && git pull origin main
+    fi
+    if [ ! -d "$LAUNCHER_ROOT" ]; then
+        echo "      > Repository missing. Cloning raggiesoft-launcher from GitHub..."
+        mkdir -p "$(dirname "$LAUNCHER_ROOT")"
+        git clone https://github.com/raggiesoft/raggiesoft-launcher.git "$LAUNCHER_ROOT" 2>/dev/null || true
+    elif [ -d "$LAUNCHER_ROOT/.git" ] && (cd "$LAUNCHER_ROOT" && git remote get-url origin &>/dev/null); then
+        cd "$LAUNCHER_ROOT" && git pull origin main
     fi
 
     echo "   5.7 Checking Executive Systems Architect Dossier (michaelpragsdale.com/www)..."
@@ -1721,6 +1731,42 @@ function do_push() {
                 echo "      ✓ Pending Jessica Sanctuary Guide code sent to GitHub."
             else
                 echo "      (Jessica Sanctuary Guide is clean and up to date.)"
+            fi
+        fi
+    fi
+
+    # 4.999 RAGGIESOFT LAUNCHER PUSH (`launcher.raggiesoft.com` — Fluent UI Web Components + TypeScript + Vite Static SSG)
+    if [ -d "$LAUNCHER_ROOT" ] && [ -f "$LAUNCHER_ROOT/package.json" ]; then
+        echo "   -> Packaging RaggieSoft Launcher Portal (launcher.raggiesoft.com)..."
+        cd "$LAUNCHER_ROOT"
+        if [ ! -d "$LAUNCHER_ROOT/node_modules" ]; then
+            echo "      > Installing Fluent UI Web Components + TypeScript + Vite dependencies non-interactively..."
+            run_non_interactive_npm install
+            if [ $? -ne 0 ]; then
+                echo "🛑 JENNA: ABORTING! npm install failed in launcher.raggiesoft.com."
+                exit 1
+            fi
+        fi
+        run_non_interactive_npm run build
+        if [ $? -ne 0 ]; then
+            echo "🛑 JENNA: ABORTING! Fluent UI Web Components SSG build failed in launcher.raggiesoft.com."
+            exit 1
+        fi
+        if [ -d "$LAUNCHER_ROOT/.git" ]; then
+            git add -A
+            if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
+                git commit -m "$COMMIT_MSG"
+                if git remote get-url origin &>/dev/null; then
+                    git push -u $FORCE_FLAG origin main
+                    echo "      ✓ RaggieSoft Launcher Portal committed and sent to GitHub."
+                else
+                    echo "      ✓ RaggieSoft Launcher Portal committed locally (awaiting GitHub 'origin' remote)."
+                fi
+            elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
+                git push -u $FORCE_FLAG origin main
+                echo "      ✓ Pending RaggieSoft Launcher Portal code sent to GitHub."
+            else
+                echo "      (RaggieSoft Launcher Portal is clean and up to date.)"
             fi
         fi
     fi

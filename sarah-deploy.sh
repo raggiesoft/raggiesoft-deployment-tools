@@ -1150,6 +1150,9 @@ deploy_site "Waystation" "/home/michael/raggiesoft-waystation" "/var/www/waystat
 # 15. PROCESS JESSICA SANCTUARY GUIDE (`jessica.raggiesoft.com` — Preact 10 + Signals + TS + Vite Static SSG `/dist`)
 deploy_site "Jessica" "/home/michael/raggiesoft-jessica" "/var/www/jessica.raggiesoft.com" "/home/michael/raggiesoft-jessica/dist"
 
+# 16. PROCESS RAGGIESOFT LAUNCHER (`launcher.raggiesoft.com` — Fluent UI Web Components + TS + Vite Static SSG `/dist`)
+deploy_site "Launcher" "/home/michael/raggiesoft-launcher" "/var/www/launcher.raggiesoft.com" "/home/michael/raggiesoft-launcher/dist"
+
 
 
 
