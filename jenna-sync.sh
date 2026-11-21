@@ -1217,6 +1217,28 @@ function do_push() {
     #   4. `else`: Repository is 100% clean & synced—skip in milliseconds!
     # ============================================================================
 
+    # 3.9 PRE-SYNC SHARED CSS/JS ASSETS TO DIGITALOCEAN SPACES CDN FIRST
+    # Why sync `common/`, `nebulae/`, and `storetrainer/` BEFORE pushing HTML repos in Step 4?
+    # Because `sarah.timer` runs every 5 minutes on NYC1! Uploading `raggiesoft-network.css`
+    # and `raggiesoft-network.js` to `do-spaces:assets.raggiesoft.com` FIRST guarantees that
+    # when any browser or Cloudflare edge PoP requests a new `?v=...` query string right after
+    # an HTML deploy, the updated CSS/JS is ALREADY live on DigitalOcean Spaces (eliminating
+    # stale edge-cache race conditions!).
+    echo "   0. Pre-syncing shared CSS & JS assets to DigitalOcean Spaces CDN before HTML builds..."
+    run_cdn_preflight
+    if [ "$CAN_SYNC_CDN" = true ]; then
+        for PRE_DIR in common nebulae storetrainer; do
+            if [ -d "$ASSETS_ROOT/$PRE_DIR" ]; then
+                "$RCLONE_BIN" sync "$ASSETS_ROOT/$PRE_DIR" "do-spaces:assets.raggiesoft.com/$PRE_DIR" \
+                    --config "$RCLONE_CONF" \
+                    --exclude "._*" \
+                    --exclude ".DS_Store" \
+                    --s3-acl public-read \
+                    "${RCLONE_PERF_FLAGS[@]}"
+            fi
+        done
+    fi
+
     # 4. HUB PUSH (`raggiesoft.com/www`)
     echo "   1. Packaging the Hub..."
     if [ -d "$HUB_ROOT" ]; then
