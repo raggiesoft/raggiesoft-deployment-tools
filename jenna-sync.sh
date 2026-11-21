@@ -1918,14 +1918,18 @@ function do_push() {
         cd "$DESKTOP_STORETRAINER_ROOT"
         # Non-interactive .NET 10 pre-push compile check if dotnet SDK is installed locally
         if [ -f "$DESKTOP_STORETRAINER_ROOT/dotnet-v2.0/StoreTrainer/StoreTrainer.csproj" ]; then
+            local DOTNET_BIN=""
             if command -v dotnet &>/dev/null; then
-                DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 dotnet build "$DESKTOP_STORETRAINER_ROOT/dotnet-v2.0/StoreTrainer/StoreTrainer.csproj" --verbosity quiet
-                if [ $? -ne 0 ]; then
-                    echo "🛑 JENNA: ABORTING! StoreTrainer 2.0 .NET 10 build failed."
-                    exit 1
-                fi
+                DOTNET_BIN="dotnet"
             elif [ -x "/opt/homebrew/bin/dotnet" ]; then
-                DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 /opt/homebrew/bin/dotnet build "$DESKTOP_STORETRAINER_ROOT/dotnet-v2.0/StoreTrainer/StoreTrainer.csproj" --verbosity quiet
+                DOTNET_BIN="/opt/homebrew/bin/dotnet"
+            fi
+            if [ -n "$DOTNET_BIN" ]; then
+                local ST_NORESTORE=""
+                if [ -f "$DESKTOP_STORETRAINER_ROOT/dotnet-v2.0/StoreTrainer/obj/project.assets.json" ]; then
+                    ST_NORESTORE="--no-restore"
+                fi
+                DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 "$DOTNET_BIN" build "$DESKTOP_STORETRAINER_ROOT/dotnet-v2.0/StoreTrainer/StoreTrainer.csproj" $ST_NORESTORE --disable-build-servers -p:NuGetAudit=false --verbosity quiet
                 if [ $? -ne 0 ]; then
                     echo "🛑 JENNA: ABORTING! StoreTrainer 2.0 .NET 10 build failed."
                     exit 1
@@ -1957,14 +1961,18 @@ function do_push() {
     if [ -d "$DESKTOP_A11Y_STUDIO_ROOT/.git" ]; then
         cd "$DESKTOP_A11Y_STUDIO_ROOT"
         if [ -f "$DESKTOP_A11Y_STUDIO_ROOT/RaggieSoftAccessibilityStudio.slnx" ]; then
+            local DOTNET_BIN=""
             if command -v dotnet &>/dev/null; then
-                DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 dotnet build "$DESKTOP_A11Y_STUDIO_ROOT/RaggieSoftAccessibilityStudio.slnx" --disable-build-servers --verbosity quiet
-                if [ $? -ne 0 ]; then
-                    echo "🛑 JENNA: ABORTING! RaggieSoft Accessibility Studio .NET 10 build failed."
-                    exit 1
-                fi
+                DOTNET_BIN="dotnet"
             elif [ -x "/opt/homebrew/bin/dotnet" ]; then
-                DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 /opt/homebrew/bin/dotnet build "$DESKTOP_A11Y_STUDIO_ROOT/RaggieSoftAccessibilityStudio.slnx" --disable-build-servers --verbosity quiet
+                DOTNET_BIN="/opt/homebrew/bin/dotnet"
+            fi
+            if [ -n "$DOTNET_BIN" ]; then
+                local A11Y_NORESTORE=""
+                if [ -f "$DESKTOP_A11Y_STUDIO_ROOT/src/AccessibilityStudio.WinForms/obj/project.assets.json" ]; then
+                    A11Y_NORESTORE="--no-restore"
+                fi
+                DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 "$DOTNET_BIN" build "$DESKTOP_A11Y_STUDIO_ROOT/RaggieSoftAccessibilityStudio.slnx" $A11Y_NORESTORE --disable-build-servers -p:NuGetAudit=false --verbosity quiet
                 if [ $? -ne 0 ]; then
                     echo "🛑 JENNA: ABORTING! RaggieSoft Accessibility Studio .NET 10 build failed."
                     exit 1
