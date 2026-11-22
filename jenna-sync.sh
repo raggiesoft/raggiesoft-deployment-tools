@@ -2043,7 +2043,8 @@ function do_push() {
         cd "$MSICODE_SKILL_ROOT"
         # Pre-push clean-room codec round-trip self-test (`-B` avoids writing `.pyc` cache files)
         if [ -f "$MSICODE_SKILL_ROOT/examples/build_widgetapp_example.py" ] && command -v python3 &>/dev/null; then
-            python3 -B "$MSICODE_SKILL_ROOT/examples/build_widgetapp_example.py" >/dev/null
+            python3 -B "$MSICODE_SKILL_ROOT/examples/build_widgetapp_example.py" >/dev/null && \
+            python3 -B "$MSICODE_SKILL_ROOT/examples/build_addon_micro_installer.py" >/dev/null
             if [ $? -ne 0 ]; then
                 echo "🛑 JENNA: ABORTING! msicode-dfm-ai-skill Python codec self-test failed."
                 exit 1
