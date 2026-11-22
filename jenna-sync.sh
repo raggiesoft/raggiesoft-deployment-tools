@@ -165,6 +165,7 @@ NGINX_CONFIG_ROOT="$SERVER_ROOT/nginx-config"
 DESKTOP_APPS_ROOT="$PARENT_ROOT/desktop-apps"
 DESKTOP_STORETRAINER_ROOT="$DESKTOP_APPS_ROOT/storetrainer"
 DESKTOP_A11Y_STUDIO_ROOT="$DESKTOP_APPS_ROOT/accessibility-studio"
+MSICODE_SKILL_ROOT="$PARENT_ROOT/msicode-dfm-ai-skill"
 LOGS_DIR="$WORKSPACE_DIR/logs"
 
 # ============================================================================
@@ -1014,6 +1015,14 @@ function do_pull() {
         git clone https://github.com/raggiesoft/storetrainer.git "$DESKTOP_STORETRAINER_ROOT" 2>/dev/null || true
     elif [ -d "$DESKTOP_STORETRAINER_ROOT/.git" ] && (cd "$DESKTOP_STORETRAINER_ROOT" && git remote get-url origin &>/dev/null); then
         cd "$DESKTOP_STORETRAINER_ROOT" && git pull origin main
+    fi
+
+    echo "   5.10 Checking Public MSIcode & DFM AI Skill Repository (msicode-dfm-ai-skill)..."
+    if [ ! -d "$MSICODE_SKILL_ROOT" ]; then
+        echo "      > Repository missing. Cloning msicode-dfm-ai-skill from GitHub..."
+        git clone https://github.com/raggiesoft/msicode-dfm-ai-skill.git "$MSICODE_SKILL_ROOT" 2>/dev/null || true
+    elif [ -d "$MSICODE_SKILL_ROOT/.git" ] && (cd "$MSICODE_SKILL_ROOT" && git remote get-url origin &>/dev/null); then
+        cd "$MSICODE_SKILL_ROOT" && git pull origin main
     fi
     
     # Pull public CDN assets down from DigitalOcean Spaces (`rclone sync <remote> <local>`),
@@ -2025,6 +2034,38 @@ function do_push() {
             echo "      ✓ Pending Accessibility Studio IDE commits sent to GitHub."
         else
             echo "      (Accessibility Studio IDE repo is clean and up to date.)"
+        fi
+    fi
+
+    # 4.15 PUBLIC MSICODE & DFM AI SKILL REPOSITORY PUSH (`/msicode-dfm-ai-skill` -> github.com/raggiesoft/msicode-dfm-ai-skill)
+    echo "   -> Packaging Public MSIcode & DFM AI Skill Repository (/msicode-dfm-ai-skill)..."
+    if [ -d "$MSICODE_SKILL_ROOT/.git" ]; then
+        cd "$MSICODE_SKILL_ROOT"
+        # Pre-push clean-room codec round-trip self-test (`-B` avoids writing `.pyc` cache files)
+        if [ -f "$MSICODE_SKILL_ROOT/examples/build_widgetapp_example.py" ] && command -v python3 &>/dev/null; then
+            python3 -B "$MSICODE_SKILL_ROOT/examples/build_widgetapp_example.py" >/dev/null
+            if [ $? -ne 0 ]; then
+                echo "🛑 JENNA: ABORTING! msicode-dfm-ai-skill Python codec self-test failed."
+                exit 1
+            fi
+        fi
+
+        git add -A
+
+        if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
+            git commit -m "$COMMIT_MSG"
+            if git remote get-url origin &>/dev/null; then
+                git push -u $FORCE_FLAG origin main
+                echo "      ✓ msicode-dfm-ai-skill repo committed and sent to GitHub."
+            else
+                echo "      ✓ msicode-dfm-ai-skill repo committed locally."
+            fi
+        elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
+            echo "      ⚠️  Found pending msicode-dfm-ai-skill commits. Pushing now..."
+            git push -u $FORCE_FLAG origin main
+            echo "      ✓ Pending msicode-dfm-ai-skill commits sent to GitHub."
+        else
+            echo "      (msicode-dfm-ai-skill repo is clean and up to date.)"
         fi
     fi
 
