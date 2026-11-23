@@ -33,6 +33,14 @@ chloe/
 temp_*.jsonl
 temp_*.txt
 
+# --- Strictly Local AI Handoff Staging (Recursive — NEVER on GitHub) ---
+/ai-staging/
+**/ai-staging/
+**/ai-staging/**
+*.exe
+*.msi
+*.7zip
+
 # --- Legacy Manuscript Staging & Upscayl Outputs ---
 books/
 *[Uu]pscayl*/

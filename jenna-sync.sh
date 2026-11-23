@@ -2140,6 +2140,8 @@ function do_push() {
         "$RCLONE_BIN" sync "$ASSETS_ROOT" do-spaces:assets.raggiesoft.com \
             --config "$RCLONE_CONF" \
             --exclude "/_workspace/**" \
+            --exclude "/ai-staging/**" \
+            --exclude "**/ai-staging/**" \
             --exclude "/.git/**" \
             --exclude "**/vault/**" \
             --exclude "**/vault-*/**" \
