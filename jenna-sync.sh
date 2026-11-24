@@ -1432,7 +1432,20 @@ function do_pull() {
 # Mode 2: do_push (`./jenna-sync.sh --push -m "Message" [-t "v1.0.0"]`)
 # ============================================================================
 function do_push() {
-    # Require a commit message (`-m`) or release tag (`-t`) so history stays documented
+    # AI Agent Constant-Command Inbox (`$HOME/Developer/ai-staging/jenna-commit-msg.txt`):
+    # Why? Passing `-m "Different Message Every Time"` mutates the CLI string on every deploy,
+    # causing AI IDE command allowlists ("Yes, Always" / "Always Allow") to re-prompt every time!
+    # When an AI agent writes `ai-staging/jenna-commit-msg.txt` first and invokes the 100% static,
+    # quote-free command `.\raggiesoft-deployment-tools\jenna-sync.cmd --push` (or
+    # `./raggiesoft-deployment-tools/jenna-sync.sh --push`), Jenna reads and immediately deletes
+    # that one-shot inbox file here so a stale commit message can never linger on disk.
+    local COMMIT_MSG_INBOX="$PARENT_ROOT/ai-staging/jenna-commit-msg.txt"
+    if [[ -z "$COMMIT_MSG" && -s "$COMMIT_MSG_INBOX" ]]; then
+        COMMIT_MSG="$(tr -d '\r' < "$COMMIT_MSG_INBOX" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+        rm -f "$COMMIT_MSG_INBOX"
+    fi
+
+    # Require a commit message (`-m` or `ai-staging/jenna-commit-msg.txt`) or release tag (`-t`)
     if [[ -z "$COMMIT_MSG" && -z "$TAG_NAME" ]]; then
         echo "🛑 JENNA: MISSING COMMIT MESSAGE"
         show_help
@@ -2654,6 +2667,12 @@ while [[ "$#" -gt 0 ]]; do
         --indexnow) ACTION="indexnow" ;;
         --force) FORCE_FLAG="--force" ;;
         --msg|-m) COMMIT_MSG="$2"; shift ;;
+        --msg-file)
+            if [[ -f "$2" ]]; then
+                COMMIT_MSG="$(tr -d '\r' < "$2" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            fi
+            shift
+            ;;
         --tag|-t) TAG_NAME="$2"; shift ;;
         *) echo "👱‍♀️ JENNA: I don't recognize the command '$1'."; show_help; exit 1 ;;
     esac
