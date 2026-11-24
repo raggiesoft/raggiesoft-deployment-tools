@@ -104,10 +104,13 @@ write_files:
           }
 
           # Static image 30-day browser caching (`expires 30d`) + Referer hotlink protection
-          # across all 9 verified Michael P. Ragsdale domains and major search engines
+          # across all 12 verified Michael P. Ragsdale domains and major search engines
           location ~* \.(gif|png|jpe?g|svg|webp|ico)$ {
               valid_referers none blocked server_names 
                              *.raggiesoft.com
+                             *.raggiesoftstudio.com raggiesoftstudio.com
+                             *.installwithoutlimits.com installwithoutlimits.com
+                             *.raggiesoft.dev raggiesoft.dev
                              *.michaelpragsdale.com michaelpragsdale.com
                              *.engineroom-records.com engineroom-records.com
                              *.thestardustengine.com thestardustengine.com

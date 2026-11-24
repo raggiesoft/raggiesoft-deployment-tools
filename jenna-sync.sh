@@ -652,19 +652,28 @@ function show_help() {
 }
 
 # ============================================================================
-# QA Gate 1: run_integrity_check (Pre-Push WCAG & 404 Route Validator)
+# QA Gate 1: run_integrity_check (Pre-Push WCAG, 404 Route & Mobile Header Gate)
 # ============================================================================
 # Runs an inline PHP CLI script (`php -r "..."`) inside a subshell `( ... )`
-# (parentheses isolate `cd "$WORKSPACE_DIR"` so the outer shell's directory never moves!).
-# Scans every JSON route manifest in `raggiesoft.com/www/data/routes/*.json`:
-#   1. Fails with `WCAG FAIL` if a route sets `navbarBrandLogo` without `navbarBrandAlt`!
-#   2. Fails with `404 FAIL` if a route's `"view"` points to a missing `.php` file!
+# (parentheses isolate `cd "$WORKSPACE_DIR"` so the outer shell's directory never moves!):
+#   Part A: Scans every JSON route manifest in `raggiesoft.com/www/data/routes/*.json`:
+#     1. Fails with `WCAG FAIL` if a route sets `navbarBrandLogo` without `navbarBrandAlt`!
+#     2. Fails with `404 FAIL` if a route's `"view"` points to a missing `.php` file!
+#   Part B: Scans EVERY RaggieSoft web property (`raggiesoft.com/www`, `*.com/www`,
+#     `*.dev/www`, and all `raggiesoft.com/subdomains/*` apps) to guarantee 100%
+#     adherence to the Network Bar & Single-Hamburger Mobile Header Standard:
+#     1. Must load `raggiesoft-network.css` and `raggiesoft-network.js`!
+#     2. Must render `.rs-network-bar`!
+#     3. Must expose a compliant mobile hamburger container (`header-navigation-panel`,
+#        `primary-navigation`, `navbarCollapse`, `music-mobile-navigation`, or `stardust-sidebar`)
+#        so no new site or subdomain ever ships an unwrapped multi-row mobile header!
 # If `$? -ne 0` (exit code `1`), Jenna aborts the push immediately before shipping broken code.
 function run_integrity_check() {
-    echo "👱‍♀️ JENNA: QA Protocol Initiated..."
+    echo "👱‍♀️ JENNA: QA Protocol Initiated (Routes, WCAG Alt Text & Network Mobile Headers)..."
     (
         cd "$WORKSPACE_DIR" && php -r "
-            \$hubRoot = realpath('../raggiesoft-servers/raggiesoft.com/www') ?: realpath('../raggiesoft.com/www') ?: realpath('../raggiesoft-hub');
+            \$serverRoot = realpath('../raggiesoft-servers') ?: realpath('..');
+            \$hubRoot = realpath(\$serverRoot . '/raggiesoft.com/www') ?: realpath('../raggiesoft-hub');
             if (!\$hubRoot || !is_dir(\$hubRoot)) { exit(1); }
             \$hasErrors = false;
             \$pattern = \$hubRoot . '/data/routes/*.json';
@@ -692,6 +701,60 @@ function run_integrity_check() {
                     }
                 }
             }
+
+            // Part B: Network-Wide Mobile Header & Ecosystem Bar Audit across ALL web roots
+            \$webTargets = [];
+            foreach (array_merge(glob(\$serverRoot . '/*.com/www') ?: [], glob(\$serverRoot . '/*.dev/www') ?: []) as \$topWeb) {
+                if (is_dir(\$topWeb)) { \$webTargets[] = \$topWeb; }
+            }
+            foreach (glob(\$serverRoot . '/raggiesoft.com/subdomains/*') ?: [] as \$subWeb) {
+                if (is_dir(\$subWeb)) { \$webTargets[] = \$subWeb; }
+            }
+
+            \$skipDirs = ['node_modules', '.git', '.next', '.nuxt', '.svelte-kit', 'dist', 'build', 'out', '.output', '.ssr-temp'];
+            \$allowedExts = ['html', 'php', 'ts', 'tsx', 'svelte', 'astro', 'vue', 'njk', 'js', 'mjs'];
+            \$mobileNavHooks = ['header-navigation-panel', 'primary-navigation', 'navbarCollapse', 'music-mobile-navigation', 'stardust-sidebar'];
+
+            foreach (\$webTargets as \$propDir) {
+                \$relName = ltrim(str_replace('\\\\', '/', substr(\$propDir, strlen(\$serverRoot))), '/');
+                \$hasNetCss = false;
+                \$hasNetJs = false;
+                \$hasNetBar = false;
+                \$hasMobNav = false;
+
+                \$dirIter = new RecursiveDirectoryIterator(\$propDir, FilesystemIterator::SKIP_DOTS);
+                \$filterIter = new RecursiveCallbackFilterIterator(\$dirIter, function (\$current) use (\$skipDirs) {
+                    if (\$current->isDir() && in_array(\$current->getFilename(), \$skipDirs, true)) {
+                        return false;
+                    }
+                    return true;
+                });
+                foreach (new RecursiveIteratorIterator(\$filterIter) as \$srcFile) {
+                    if (!\$srcFile->isFile()) { continue; }
+                    \$ext = strtolower(\$srcFile->getExtension());
+                    if (!in_array(\$ext, \$allowedExts, true)) { continue; }
+                    \$txt = @file_get_contents(\$srcFile->getPathname());
+                    if (\$txt === false) { continue; }
+                    if (strpos(\$txt, 'raggiesoft-network.css') !== false) { \$hasNetCss = true; }
+                    if (strpos(\$txt, 'raggiesoft-network.js') !== false) { \$hasNetJs = true; }
+                    if (strpos(\$txt, 'rs-network-bar') !== false) { \$hasNetBar = true; }
+                    foreach (\$mobileNavHooks as \$hook) {
+                        if (strpos(\$txt, \$hook) !== false) { \$hasMobNav = true; break; }
+                    }
+                    if (\$hasNetCss && \$hasNetJs && \$hasNetBar && \$hasMobNav) { break; }
+                }
+
+                if (!\$hasNetCss || !\$hasNetJs || !\$hasNetBar || !\$hasMobNav) {
+                    \$missing = [];
+                    if (!\$hasNetCss) { \$missing[] = 'raggiesoft-network.css'; }
+                    if (!\$hasNetJs)  { \$missing[] = 'raggiesoft-network.js'; }
+                    if (!\$hasNetBar) { \$missing[] = '.rs-network-bar'; }
+                    if (!\$hasMobNav) { \$missing[] = 'mobile hamburger container (#header-navigation-panel / #primary-navigation)'; }
+                    echo \"❌ MOBILE HEADER / NETWORK BAR QA FAIL: [\$relName] missing \" . implode(', ', \$missing) . \"!\n\";
+                    \$hasErrors = true;
+                }
+            }
+
             if (\$hasErrors) { exit(1); }
             exit(0); 
         "
@@ -700,7 +763,7 @@ function run_integrity_check() {
         echo "🛑 JENNA: INTEGRITY CHECK FAILED."
         exit 1
     else
-        echo "✅ JENNA: Integrity check passed. Proceeding..."
+        echo "✅ JENNA: Integrity & Network Mobile Header checks passed across all web properties. Proceeding..."
     fi
 }
 
@@ -2082,9 +2145,9 @@ function do_push() {
         fi
     fi
 
-    # 4.9996 RAGGIESOFT INSTALLER STUDIO STOREFRONT PUSH (`raggiesoftstudio.com` + `installwithoutlimits.com` 301 — Alpine.js + TS + Vite Static SSG)
+    # 4.9996 RAGGIESOFT INSTALLER STUDIO PORTAL PUSH (`raggiesoftstudio.com` + `installwithoutlimits.com` 301 — Alpine.js + TS + Vite Static SSG)
     if [ -d "$RAGGIESOFT_STUDIO_WEB_ROOT" ] && [ -f "$RAGGIESOFT_STUDIO_WEB_ROOT/package.json" ]; then
-        echo "   -> Packaging RaggieSoft Installer Studio Storefront (raggiesoftstudio.com)..."
+        echo "   -> Packaging RaggieSoft Installer Studio Portal (raggiesoftstudio.com)..."
         cd "$RAGGIESOFT_STUDIO_WEB_ROOT"
         if [ ! -d "$RAGGIESOFT_STUDIO_WEB_ROOT/node_modules" ]; then
             echo "      > Installing Alpine.js + TypeScript + Vite dependencies non-interactively..."
@@ -2504,7 +2567,7 @@ CONNECTION_MSG="🚀 AUTOMATIC PRE-FLIGHT MODE: 5-second GitHub & CDN connection
 case "$ACTION" in
     pull) do_pull ;;
     push) do_push ;;
-    audit) run_orphan_audit ;;
+    audit) run_integrity_check; run_orphan_audit ;;
     indexnow) submit_indexnow_pings ;;
     *) show_help ;;
 esac
