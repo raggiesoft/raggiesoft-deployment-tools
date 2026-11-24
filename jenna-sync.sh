@@ -151,7 +151,16 @@ if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
         }
     fi
     function python3() {
-        if command -v py >/dev/null 2>&1; then
+        local win_py=""
+        for cand in "/c/Users/$USERNAME/AppData/Local/Programs/Python"/Python3*/python.exe; do
+            if [ -x "$cand" ]; then
+                win_py="$cand"
+                break
+            fi
+        done
+        if [ -n "$win_py" ]; then
+            "$win_py" "$@"
+        elif command -v py >/dev/null 2>&1; then
             py -3 "$@"
         elif [ -x "/c/Users/$USERNAME/AppData/Local/Programs/Python/Launcher/py.exe" ]; then
             "/c/Users/$USERNAME/AppData/Local/Programs/Python/Launcher/py.exe" -3 "$@"
@@ -1001,6 +1010,8 @@ function submit_indexnow_pings() {
         "$JESSICA_ROOT/dist"
         "$LAUNCHER_ROOT/dist"
         "$A11Y_ROOT/dist"
+        "$RAGGIESOFT_STUDIO_WEB_ROOT/dist"
+        "$RAGGIESOFT_DEV_WEB_ROOT/dist"
         "$NEBULAE_ROOT"
         "$LORE_ROOT/out"
         "$PORTFOLIO_ROOT/dist/raggiesoft-portfolio/browser"
@@ -1183,6 +1194,27 @@ function do_pull() {
         git clone https://github.com/raggiesoft/raggiesoft-launcher.git "$LAUNCHER_ROOT" 2>/dev/null || true
     elif [ -d "$LAUNCHER_ROOT/.git" ] && (cd "$LAUNCHER_ROOT" && git remote get-url origin &>/dev/null); then
         cd "$LAUNCHER_ROOT" && git pull origin main
+    fi
+    if [ ! -d "$A11Y_ROOT" ]; then
+        echo "      > Repository missing. Cloning raggiesoft-a11y-studio from GitHub..."
+        mkdir -p "$(dirname "$A11Y_ROOT")"
+        git clone https://github.com/raggiesoft/raggiesoft-a11y-studio.git "$A11Y_ROOT" 2>/dev/null || true
+    elif [ -d "$A11Y_ROOT/.git" ] && (cd "$A11Y_ROOT" && git remote get-url origin &>/dev/null); then
+        cd "$A11Y_ROOT" && git pull origin main
+    fi
+    if [ ! -d "$RAGGIESOFT_STUDIO_WEB_ROOT" ]; then
+        echo "      > Repository missing. Cloning raggiesoft-studio from GitHub..."
+        mkdir -p "$(dirname "$RAGGIESOFT_STUDIO_WEB_ROOT")"
+        git clone https://github.com/raggiesoft/raggiesoft-studio.git "$RAGGIESOFT_STUDIO_WEB_ROOT" 2>/dev/null || true
+    elif [ -d "$RAGGIESOFT_STUDIO_WEB_ROOT/.git" ] && (cd "$RAGGIESOFT_STUDIO_WEB_ROOT" && git remote get-url origin &>/dev/null); then
+        cd "$RAGGIESOFT_STUDIO_WEB_ROOT" && git pull origin main
+    fi
+    if [ ! -d "$RAGGIESOFT_DEV_WEB_ROOT" ]; then
+        echo "      > Repository missing. Cloning raggiesoft-dev from GitHub..."
+        mkdir -p "$(dirname "$RAGGIESOFT_DEV_WEB_ROOT")"
+        git clone https://github.com/raggiesoft/raggiesoft-dev.git "$RAGGIESOFT_DEV_WEB_ROOT" 2>/dev/null || true
+    elif [ -d "$RAGGIESOFT_DEV_WEB_ROOT/.git" ] && (cd "$RAGGIESOFT_DEV_WEB_ROOT" && git remote get-url origin &>/dev/null); then
+        cd "$RAGGIESOFT_DEV_WEB_ROOT" && git pull origin main
     fi
 
     echo "   5.7 Checking Executive Systems Architect Dossier (michaelpragsdale.com/www)..."
@@ -2046,6 +2078,78 @@ function do_push() {
                 echo "      ✓ Pending RaggieSoft Accessibility Studio Portal code sent to GitHub."
             else
                 echo "      (RaggieSoft Accessibility Studio Portal is clean and up to date.)"
+            fi
+        fi
+    fi
+
+    # 4.9996 RAGGIESOFT INSTALLER STUDIO STOREFRONT PUSH (`raggiesoftstudio.com` + `installwithoutlimits.com` 301 — Alpine.js + TS + Vite Static SSG)
+    if [ -d "$RAGGIESOFT_STUDIO_WEB_ROOT" ] && [ -f "$RAGGIESOFT_STUDIO_WEB_ROOT/package.json" ]; then
+        echo "   -> Packaging RaggieSoft Installer Studio Storefront (raggiesoftstudio.com)..."
+        cd "$RAGGIESOFT_STUDIO_WEB_ROOT"
+        if [ ! -d "$RAGGIESOFT_STUDIO_WEB_ROOT/node_modules" ]; then
+            echo "      > Installing Alpine.js + TypeScript + Vite dependencies non-interactively..."
+            run_non_interactive_npm install
+            if [ $? -ne 0 ]; then
+                echo "🛑 JENNA: ABORTING! npm install failed in raggiesoftstudio.com."
+                exit 1
+            fi
+        fi
+        run_non_interactive_npm run build
+        if [ $? -ne 0 ]; then
+            echo "🛑 JENNA: ABORTING! Alpine.js SSG build failed in raggiesoftstudio.com."
+            exit 1
+        fi
+        if [ -d "$RAGGIESOFT_STUDIO_WEB_ROOT/.git" ]; then
+            git add -A
+            if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
+                git commit -m "$COMMIT_MSG"
+                if git remote get-url origin &>/dev/null; then
+                    git push -u $FORCE_FLAG origin main
+                    echo "      ✓ RaggieSoft Installer Studio Storefront committed and sent to GitHub."
+                else
+                    echo "      ✓ RaggieSoft Installer Studio Storefront committed locally (awaiting GitHub 'origin' remote)."
+                fi
+            elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
+                git push -u $FORCE_FLAG origin main
+                echo "      ✓ Pending RaggieSoft Installer Studio Storefront code sent to GitHub."
+            else
+                echo "      (RaggieSoft Installer Studio Storefront is clean and up to date.)"
+            fi
+        fi
+    fi
+
+    # 4.9997 RAGGIESOFT DEVELOPER HUB PUSH (`raggiesoft.dev` — Alpine.js + TS + Vite Static SSG)
+    if [ -d "$RAGGIESOFT_DEV_WEB_ROOT" ] && [ -f "$RAGGIESOFT_DEV_WEB_ROOT/package.json" ]; then
+        echo "   -> Packaging RaggieSoft Developer Hub (raggiesoft.dev)..."
+        cd "$RAGGIESOFT_DEV_WEB_ROOT"
+        if [ ! -d "$RAGGIESOFT_DEV_WEB_ROOT/node_modules" ]; then
+            echo "      > Installing Alpine.js + TypeScript + Vite dependencies non-interactively..."
+            run_non_interactive_npm install
+            if [ $? -ne 0 ]; then
+                echo "🛑 JENNA: ABORTING! npm install failed in raggiesoft.dev."
+                exit 1
+            fi
+        fi
+        run_non_interactive_npm run build
+        if [ $? -ne 0 ]; then
+            echo "🛑 JENNA: ABORTING! Alpine.js SSG build failed in raggiesoft.dev."
+            exit 1
+        fi
+        if [ -d "$RAGGIESOFT_DEV_WEB_ROOT/.git" ]; then
+            git add -A
+            if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
+                git commit -m "$COMMIT_MSG"
+                if git remote get-url origin &>/dev/null; then
+                    git push -u $FORCE_FLAG origin main
+                    echo "      ✓ RaggieSoft Developer Hub committed and sent to GitHub."
+                else
+                    echo "      ✓ RaggieSoft Developer Hub committed locally (awaiting GitHub 'origin' remote)."
+                fi
+            elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
+                git push -u $FORCE_FLAG origin main
+                echo "      ✓ Pending RaggieSoft Developer Hub code sent to GitHub."
+            else
+                echo "      (RaggieSoft Developer Hub is clean and up to date.)"
             fi
         fi
     fi

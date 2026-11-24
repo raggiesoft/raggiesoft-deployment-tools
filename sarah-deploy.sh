@@ -1156,6 +1156,12 @@ deploy_site "Launcher" "/home/michael/raggiesoft-launcher" "/var/www/launcher.ra
 # 17. PROCESS RAGGIESOFT ACCESSIBILITY STUDIO (`a11y.raggiesoft.com` — IBM Carbon Web Components + TS + Vite Static SSG `/dist`)
 deploy_site "Accessibility Studio" "/home/michael/raggiesoft-a11y-studio" "/var/www/a11y.raggiesoft.com" "/home/michael/raggiesoft-a11y-studio/dist"
 
+# 18. PROCESS RAGGIESOFT INSTALLER STUDIO (`raggiesoftstudio.com` + `installwithoutlimits.com` 301 — Alpine.js + TS + Vite Static SSG `/dist`)
+deploy_site "RaggieSoft Installer Studio" "/home/michael/raggiesoft-studio" "/var/www/raggiesoftstudio.com" "/home/michael/raggiesoft-studio/dist"
+
+# 19. PROCESS RAGGIESOFT DEVELOPER HUB (`raggiesoft.dev` — Alpine.js + TS + Vite Static SSG `/dist`)
+deploy_site "RaggieSoft Developer Hub" "/home/michael/raggiesoft-dev" "/var/www/raggiesoft.dev" "/home/michael/raggiesoft-dev/dist"
+
 
 
 
