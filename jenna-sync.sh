@@ -116,6 +116,51 @@ export HOMEBREW_NO_AUTO_UPDATE=1
 export HOMEBREW_NO_INSTALL_CLEANUP=1
 export GH_PROMPT_DISABLED=1
 
+# --- WINDOWS 11 GIT BASH (`msys` / `cygwin`) CLI & PYTHON DISCOVERY SHIMS ---
+# When running Jenna from Windows 11 Pro (including ARM64 Parallels VMs mounting `$HOME/Developer`
+# at `Y:\`), auto-discover Node.js, GitHub CLI, WinGet PHP, and real Python (`py -3`) so Jenna
+# never hits Windows's 0-byte `WindowsApps\python3.exe` Microsoft Store alias stub!
+IS_WINDOWS_GIT_BASH=false
+GIT_EXTRA_ARGS=()
+if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+    IS_WINDOWS_GIT_BASH=true
+    # `core.filemode=false` is mandatory over Parallels SMB (`Y:\`) so Windows NTFS/SMB never
+    # strips Unix `100755` executable bits (`chmod +x`) or misreports clean repos as dirty!
+    GIT_EXTRA_ARGS=(-c "safe.directory=*" -c "core.filemode=false")
+    for win_bin_dir in "/c/Program Files/nodejs" "/c/Program Files/GitHub CLI"; do
+        if [ -d "$win_bin_dir" ]; then
+            export PATH="$win_bin_dir:$PATH"
+        fi
+    done
+    if ! command -v php >/dev/null 2>&1 && [ -n "$LOCALAPPDATA" ]; then
+        WIN_LOCALAPPDATA=$(cygpath -u "$LOCALAPPDATA" 2>/dev/null || echo "")
+        if [ -n "$WIN_LOCALAPPDATA" ] && [ -d "$WIN_LOCALAPPDATA/Microsoft/WinGet/Packages" ]; then
+            PHP_WINGET_EXE=$(find "$WIN_LOCALAPPDATA/Microsoft/WinGet/Packages" -maxdepth 3 -iname "php.exe" 2>/dev/null | head -n 1)
+            if [ -n "$PHP_WINGET_EXE" ]; then
+                export PATH="$(dirname "$PHP_WINGET_EXE"):$PATH"
+            fi
+        fi
+    fi
+    # Enable `mbstring` & `openssl` automatically on stock WinGet PHP builds where `php.ini`
+    # leaves `extension=mbstring` commented out by default:
+    REAL_PHP_BIN=$(type -P php 2>/dev/null || echo "")
+    if [ -n "$REAL_PHP_BIN" ]; then
+        WIN_PHP_EXT_DIR="$(cygpath -w "$(dirname "$REAL_PHP_BIN")/ext" 2>/dev/null)"
+        function php() {
+            "$REAL_PHP_BIN" -d "extension_dir=$WIN_PHP_EXT_DIR" -d extension=mbstring -d extension=openssl "$@"
+        }
+    fi
+    function python3() {
+        if command -v py >/dev/null 2>&1; then
+            py -3 "$@"
+        elif [ -x "/c/Users/$USERNAME/AppData/Local/Programs/Python/Launcher/py.exe" ]; then
+            "/c/Users/$USERNAME/AppData/Local/Programs/Python/Launcher/py.exe" -3 "$@"
+        else
+            command python3 "$@"
+        fi
+    }
+fi
+
 
 # ============================================================================
 # 1. ESTABLISH PATHS (Dynamically resolved across macOS, Linux, and Windows Git Bash)
@@ -165,7 +210,9 @@ NGINX_CONFIG_ROOT="$SERVER_ROOT/nginx-config"
 DESKTOP_APPS_ROOT="$PARENT_ROOT/desktop-apps"
 DESKTOP_STORETRAINER_ROOT="$DESKTOP_APPS_ROOT/storetrainer"
 DESKTOP_A11Y_STUDIO_ROOT="$DESKTOP_APPS_ROOT/accessibility-studio"
-MSICODE_SKILL_ROOT="$PARENT_ROOT/msicode-dfm-ai-skill"
+DESKTOP_INSTALLER_STUDIO_ROOT="$DESKTOP_APPS_ROOT/installer-studio"
+RAGGIESOFT_STUDIO_WEB_ROOT="$SERVER_ROOT/raggiesoftstudio.com/www"
+RAGGIESOFT_DEV_WEB_ROOT="$SERVER_ROOT/raggiesoft.dev/www"
 LOGS_DIR="$WORKSPACE_DIR/logs"
 
 # ============================================================================
@@ -263,6 +310,11 @@ function finalize_jenna_exit() {
 function run_with_timeout() {
     local secs="$1"
     shift
+    # Use native GNU `timeout` when present (Linux & Windows Git Bash), falling back to Perl on macOS:
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$secs" "$@"
+        return $?
+    fi
     /usr/bin/perl -e '
         my $t = shift @ARGV;
         my $pid = fork();
@@ -312,10 +364,22 @@ function run_github_preflight() {
     fi
 
     # Also verify HTTPS Port 443 reachability for any HTTPS-cloned remotes:
+    # Note: Pass `$(type -P git)` (external binary path) rather than Bash builtin `command git`
+    # because GNU `timeout` (`execvp`) requires a real executable path, not a shell builtin!
     local https_ok=false
-    if run_with_timeout 5 command git ls-remote --heads https://github.com/raggiesoft/raggiesoft-narratives.git main >/dev/null 2>&1; then
+    local real_git_bin
+    real_git_bin=$(type -P git)
+    if run_with_timeout 5 "$real_git_bin" "${GIT_EXTRA_ARGS[@]}" ls-remote --heads https://github.com/raggiesoft/raggiesoft-narratives.git main >/dev/null 2>&1; then
         https_ok=true
         echo "      ✓ GitHub HTTPS (Port 443) reachable."
+    fi
+
+    # If SSH keys aren't loaded (e.g., Windows 11 authenticated via `gh auth login -p https`),
+    # transparently route `git@github.com:` URLs over `https://github.com/` in memory (`-c`)
+    # without touching `.git/config` on shared macOS/Windows storage!
+    if [ "$ssh_ok" = false ] && [ "$https_ok" = true ]; then
+        GIT_EXTRA_ARGS+=(-c "url.https://github.com/.insteadOf=git@github.com:")
+        echo "      ✓ Auto-routing git@github.com remotes over HTTPS credential helper (non-destructive)."
     fi
 
     if [ "$ssh_ok" = true ] || [ "$https_ok" = true ]; then
@@ -377,7 +441,7 @@ function git() {
                 echo "      ⚠️  [GitHub Unreachable] Skipping 'git $*' (saved locally)."
                 return 1
             fi
-            command git "$@"
+            command git "${GIT_EXTRA_ARGS[@]}" "$@"
             local rc=$?
             if [ $rc -ne 0 ]; then
                 GITHUB_SYNC_HAD_ERROR=true
@@ -389,26 +453,156 @@ function git() {
                 echo "      ⚠️  [GitHub Unreachable] Skipping 'git $*'."
                 return 1
             fi
-            command git "$@"
+            command git "${GIT_EXTRA_ARGS[@]}" "$@"
             ;;
         *)
-            command git "$@"
+            command git "${GIT_EXTRA_ARGS[@]}" "$@"
             ;;
     esac
 }
 
 # ============================================================================
-# Helper: run_non_interactive_npm <subcommand...>
+# Helper: ensure_windows_native_npm_companions
 # ============================================================================
-# HOW `yes | npm --yes "$@"` + `${PIPESTATUS[1]}` WORKS:
-#   - Unix `yes` prints an endless stream of `"y\n"` lines into `npm`'s stdin so any
-#     unexpected `[Y/n]` prompt is answered immediately.
-#   - Normally `$?` after `yes | npm` returns the exit status of the right-hand command,
-#     while Bash's special `PIPESTATUS` array stores the exit code of EVERY stage in the
-#     pipe (`PIPESTATUS[0]` = `yes`, `PIPESTATUS[1]` = `npm`)—returning `"${PIPESTATUS[1]}"`
-#     guarantees that if `npm run build` fails, Jenna catches the exact build failure!
+# DUAL-OS PARALLELS `node_modules` HARMONY (`darwin-arm64` + `win32-arm64` / `win32-x64`):
+#   When `$HOME/Developer` is shared between macOS and a Parallels Windows 11 VM, running
+#   a normal `npm install` on Windows would prune macOS's `@esbuild/darwin-arm64` &
+#   `@rollup/rollup-darwin-arm64` packages! Instead, this helper inspects any existing
+#   `*darwin-arm64` optional native packages in `./node_modules` and unpacks the exact
+#   matching `win32-arm64` (or `win32-x64`) tarballs SIDE-BY-SIDE—leaving `package.json`,
+#   `package-lock.json`, and macOS `darwin-arm64` binaries 100% untouched!
+function ensure_windows_native_npm_companions() {
+    if [ "$IS_WINDOWS_GIT_BASH" != true ] || [ ! -d "./node_modules" ]; then
+        return 0
+    fi
+    node - <<'NODEEOF'
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const cp = require('node:child_process');
+
+const cpu = process.arch === 'arm64' ? 'arm64' : 'x64';
+const nm = path.resolve('node_modules');
+
+function findDarwinPkgs() {
+  const found = [];
+  for (const entry of fs.readdirSync(nm, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (entry.name.startsWith('@')) {
+      const scopeDir = path.join(nm, entry.name);
+      for (const sub of fs.readdirSync(scopeDir, { withFileTypes: true })) {
+        if (sub.isDirectory() && sub.name.includes('darwin-arm64')) {
+          found.push(`${entry.name}/${sub.name}`);
+        }
+      }
+    } else if (entry.name.includes('darwin-arm64')) {
+      found.push(entry.name);
+    }
+  }
+  return found;
+}
+
+function mapToWinCandidates(darwinPkg) {
+  // Handle `@esbuild/darwin-arm64` -> `@esbuild/win32-arm64`,
+  // `@rollup/rollup-darwin-arm64` -> `@rollup/rollup-win32-arm64-msvc`, etc.
+  const base = darwinPkg.replace('darwin-arm64', `win32-${cpu}`);
+  if (darwinPkg.startsWith('@esbuild/') || darwinPkg.startsWith('@lmdb/') || darwinPkg.startsWith('@msgpackr-extract/') || darwinPkg.startsWith('@parcel/watcher') || darwinPkg.startsWith('sass-embedded-')) {
+    return [base, `${base}-msvc`];
+  }
+  return [`${base}-msvc`, base];
+}
+
+for (const dPkg of findDarwinPkgs()) {
+  const pkgJsonPath = path.join(nm, ...dPkg.split('/'), 'package.json');
+  if (!fs.existsSync(pkgJsonPath)) continue;
+  const ver = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8')).version;
+  const candidates = mapToWinCandidates(dPkg);
+  if (candidates.some((c) => fs.existsSync(path.join(nm, ...c.split('/'), 'package.json')))) {
+    continue;
+  }
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rsw-npm-win-'));
+  const sysTar = fs.existsSync('C:\\Windows\\System32\\tar.exe') ? 'C:\\Windows\\System32\\tar.exe' : 'tar';
+  for (const cand of candidates) {
+    try {
+      console.log(`      [Windows Dual-OS] Unpacking ${cand}@${ver} alongside ${dPkg}...`);
+      const tgzName = cp.execSync(`npm pack "${cand}@${ver}" --silent`, { cwd: tmpDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().split(/\r?\n/).pop();
+      if (tgzName) {
+        const destDir = path.join(nm, ...cand.split('/'));
+        fs.mkdirSync(destDir, { recursive: true });
+        cp.execFileSync(sysTar, ['-xzf', path.join(tmpDir, tgzName), '-C', destDir, '--strip-components=1']);
+        break;
+      }
+    } catch (_) {}
+  }
+  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+}
+
+// Synthesize Windows `.cmd` launchers in `node_modules/.bin/` alongside macOS symlinks
+// (`ng.cmd`, `vite.cmd`, `astro.cmd`, etc.) directly from installed `package.json` `"bin"` fields!
+const binDir = path.join(nm, '.bin');
+fs.mkdirSync(binDir, { recursive: true });
+function registerPkgBins(pkgRelDir) {
+  const pjPath = path.join(nm, ...pkgRelDir.split('/'), 'package.json');
+  if (!fs.existsSync(pjPath)) return;
+  try {
+    const pj = JSON.parse(fs.readFileSync(pjPath, 'utf8'));
+    if (!pj.bin) return;
+    const map = typeof pj.bin === 'string'
+      ? { [pj.name.split('/').pop()]: pj.bin }
+      : pj.bin;
+    for (const [cmdName, relScript] of Object.entries(map)) {
+      if (!cmdName || !relScript) continue;
+      const cmdFile = path.join(binDir, `${cmdName}.cmd`);
+      if (fs.existsSync(cmdFile)) continue;
+      const winTarget = path.join('..', ...pkgRelDir.split('/'), ...String(relScript).split('/')).replace(/\//g, '\\');
+      fs.writeFileSync(cmdFile, `@ECHO off\r\nnode "%~dp0\\${winTarget}" %*\r\n`, 'ascii');
+    }
+  } catch (_) {}
+}
+for (const entry of fs.readdirSync(nm, { withFileTypes: true })) {
+  if (!entry.isDirectory() || entry.name === '.bin') continue;
+  if (entry.name.startsWith('@')) {
+    for (const sub of fs.readdirSync(path.join(nm, entry.name), { withFileTypes: true })) {
+      if (sub.isDirectory()) registerPkgBins(`${entry.name}/${sub.name}`);
+    }
+  } else {
+    registerPkgBins(entry.name);
+  }
+}
+NODEEOF
+}
+
+# Helper: Returns 0 (true = needs build) on macOS/Linux OR whenever `<dist_dir>` is missing
+# OR `<repo_dir>` has uncommitted working-tree changes; returns 1 (skip redundant SMB build)
+# on Windows Git Bash when `<repo_dir>` is 100% clean and already compiled!
+function should_build_web_repo() {
+    local repo_dir="$1"
+    local dist_dir="$2"
+    if [ "$IS_WINDOWS_GIT_BASH" != true ]; then
+        return 0
+    fi
+    if [ ! -d "$dist_dir" ]; then
+        return 0
+    fi
+    if [ -n "$(command git "${GIT_EXTRA_ARGS[@]}" -C "$repo_dir" status --porcelain 2>/dev/null)" ]; then
+        return 0
+    fi
+    return 1
+}
+
 function run_non_interactive_npm() {
     export PATH="/opt/homebrew/bin:$PATH"
+    if [ "$IS_WINDOWS_GIT_BASH" = true ] && [ "$1" = "run" ] && [[ "$2" == "build" || "$2" == "check" ]]; then
+        if { [ -d "./dist" ] || [ -d "./out" ] || [ -d "./build" ] || [ -d "./.output/public" ]; } && \
+           [ -d "./.git" ] && \
+           [ -z "$(command git "${GIT_EXTRA_ARGS[@]}" status --porcelain 2>/dev/null)" ]; then
+            echo "      (Working tree clean on Windows SMB; keeping verified production bundle.)"
+            return 0
+        fi
+    fi
+    if [ "$1" = "run" ] && [ "$2" = "build" ]; then
+        ensure_windows_native_npm_companions
+    fi
     yes 2>/dev/null | npm --yes "$@"
     return "${PIPESTATUS[1]}"
 }
@@ -1017,12 +1211,13 @@ function do_pull() {
         cd "$DESKTOP_STORETRAINER_ROOT" && git pull origin main
     fi
 
-    echo "   5.10 Checking Public MSIcode & DFM AI Skill Repository (msicode-dfm-ai-skill)..."
-    if [ ! -d "$MSICODE_SKILL_ROOT" ]; then
-        echo "      > Repository missing. Cloning msicode-dfm-ai-skill from GitHub..."
-        git clone https://github.com/raggiesoft/msicode-dfm-ai-skill.git "$MSICODE_SKILL_ROOT" 2>/dev/null || true
-    elif [ -d "$MSICODE_SKILL_ROOT/.git" ] && (cd "$MSICODE_SKILL_ROOT" && git remote get-url origin &>/dev/null); then
-        cd "$MSICODE_SKILL_ROOT" && git pull origin main
+    echo "   5.10 Checking Public RaggieSoft Installer Studio Repository (desktop-apps/installer-studio)..."
+    if [ ! -d "$DESKTOP_INSTALLER_STUDIO_ROOT" ]; then
+        echo "      > Repository missing. Cloning installer-studio from GitHub..."
+        mkdir -p "$DESKTOP_APPS_ROOT"
+        git clone https://github.com/raggiesoft/installer-studio.git "$DESKTOP_INSTALLER_STUDIO_ROOT" 2>/dev/null || true
+    elif [ -d "$DESKTOP_INSTALLER_STUDIO_ROOT/.git" ] && (cd "$DESKTOP_INSTALLER_STUDIO_ROOT" && git remote get-url origin &>/dev/null); then
+        cd "$DESKTOP_INSTALLER_STUDIO_ROOT" && git pull origin main
     fi
     
     # Pull public CDN assets down from DigitalOcean Spaces (`rclone sync <remote> <local>`),
@@ -1144,11 +1339,25 @@ function do_push() {
     echo "          $CONNECTION_MSG"
 
     # --- PRE-PUSH NARRATIVE, ASSET MINIFICATION, PAIGE, & PANDOC EBOOK PIPELINE ---
-    echo "👱‍♀️ JENNA: Generating AI Context Lumps..."
-    if [ -f "$NARRATIVES_ROOT/scripts/lump_narratives.php" ]; then
-        php "$NARRATIVES_ROOT/scripts/lump_narratives.php"
-        if [ $? -ne 0 ]; then
-            echo "⚠️  JENNA: Warning - Failed to generate AI lumps, continuing anyway..."
+    # On Windows Git Bash over Parallels SMB (`Y:\`), APFS NFD Unicode filenames in `character-list/`
+    # appear decomposed over SMB; only run the heavy Paige/Pandoc narrative pipeline on Windows if
+    # `books/*.md` was actually modified, and skip `git add` in `raggiesoft-narratives` on Windows SMB
+    # so APFS NFD filenames are never misread as deletions!
+    NARRATIVES_DIRTY=true
+    if [ "$IS_WINDOWS_GIT_BASH" = true ]; then
+        if [ ! -d "$NARRATIVES_ROOT/.git" ] || [ -z "$(command git "${GIT_EXTRA_ARGS[@]}" -C "$NARRATIVES_ROOT" status --porcelain -- books/ 2>/dev/null)" ]; then
+            NARRATIVES_DIRTY=false
+            echo "👱‍♀️ JENNA: Narratives books/ tree is clean on Windows SMB; skipping unchanged Paige/eBook pass."
+        fi
+    fi
+
+    if [ "$NARRATIVES_DIRTY" = true ]; then
+        echo "👱‍♀️ JENNA: Generating AI Context Lumps..."
+        if [ -f "$NARRATIVES_ROOT/scripts/lump_narratives.php" ]; then
+            php "$NARRATIVES_ROOT/scripts/lump_narratives.php"
+            if [ $? -ne 0 ]; then
+                echo "⚠️  JENNA: Warning - Failed to generate AI lumps, continuing anyway..."
+            fi
         fi
     fi
 
@@ -1187,30 +1396,29 @@ function do_push() {
         }
     '
 
-    # Invoke Paige (`paige.php`) to compile all book TOCs, Story Crossroads graphs, Story Arcs,
-    # hovercards, `<slug>-package.7z` archives, `search-index.json`, and Book Reader XML sitemaps!
-    echo "👱‍♀️ JENNA: Calling Paige (paige.php) to compile Narratives & Books..."
-    if [ -f "$DEPLOYMENT_TOOLS_ROOT/paige.php" ]; then
-        php "$DEPLOYMENT_TOOLS_ROOT/paige.php"
-        if [ $? -ne 0 ]; then
-            echo "🛑 JENNA: ABORTING! Paige reported an error compiling narratives."
-            exit 1
+    # Invoke Paige (`paige.php`) & `compile_ebooks.php` whenever Narratives changed (or on macOS/Linux):
+    if [ "$NARRATIVES_DIRTY" = true ]; then
+        echo "👱‍♀️ JENNA: Calling Paige (paige.php) to compile Narratives & Books..."
+        if [ -f "$DEPLOYMENT_TOOLS_ROOT/paige.php" ]; then
+            php "$DEPLOYMENT_TOOLS_ROOT/paige.php"
+            if [ $? -ne 0 ]; then
+                echo "🛑 JENNA: ABORTING! Paige reported an error compiling narratives."
+                exit 1
+            fi
+        else
+            echo "⚠️  JENNA: Could not find paige.php in raggiesoft-deployment-tools. Skipping compilation."
         fi
-    else
-        echo "⚠️  JENNA: Could not find paige.php in raggiesoft-deployment-tools. Skipping compilation."
-    fi
 
-    # Invoke `compile_ebooks.php` (uses Pandoc + WeasyPrint + `.ebook_build_hash` incremental caching
-    # to render Illustrated & Text-Only `.epub` and `.pdf` deliverables into `raggiesoft-assets/raggiesoft-books/books/<slug>/`).
-    echo "👱‍♀️ JENNA: Generating EPUB and PDF eBooks..."
-    if [ -f "$NARRATIVES_ROOT/scripts/compile_ebooks.php" ]; then
-        php "$NARRATIVES_ROOT/scripts/compile_ebooks.php"
-        if [ $? -ne 0 ]; then
-            echo "🛑 JENNA: ABORTING! Failed to compile eBooks."
-            exit 1
+        echo "👱‍♀️ JENNA: Generating EPUB and PDF eBooks..."
+        if [ -f "$NARRATIVES_ROOT/scripts/compile_ebooks.php" ]; then
+            php "$NARRATIVES_ROOT/scripts/compile_ebooks.php"
+            if [ $? -ne 0 ]; then
+                echo "🛑 JENNA: ABORTING! Failed to compile eBooks."
+                exit 1
+            fi
+        else
+            echo "⚠️  JENNA: Could not find compile_ebooks.php. Skipping eBook generation."
         fi
-    else
-        echo "⚠️  JENNA: Could not find compile_ebooks.php. Skipping eBook generation."
     fi
 
     # ============================================================================
@@ -1308,9 +1516,9 @@ function do_push() {
         fi
     fi
     
-    # 4.6 NARRATIVES PUSH
+    # 4.6 NARRATIVES PUSH (Protected against macOS APFS NFD -> Windows SMB Unicode filename skew)
     echo "   -> Packaging the Narratives..."
-    if [ -d "$NARRATIVES_ROOT" ]; then
+    if [ -d "$NARRATIVES_ROOT" ] && [ "$NARRATIVES_DIRTY" = true ]; then
         cd "$NARRATIVES_ROOT"
         git add .
         
@@ -2037,36 +2245,27 @@ function do_push() {
         fi
     fi
 
-    # 4.15 PUBLIC MSICODE & DFM AI SKILL REPOSITORY PUSH (`/msicode-dfm-ai-skill` -> github.com/raggiesoft/msicode-dfm-ai-skill)
-    echo "   -> Packaging Public MSIcode & DFM AI Skill Repository (/msicode-dfm-ai-skill)..."
-    if [ -d "$MSICODE_SKILL_ROOT/.git" ]; then
-        cd "$MSICODE_SKILL_ROOT"
-        # Pre-push clean-room codec round-trip self-test (`-B` avoids writing `.pyc` cache files)
-        if [ -f "$MSICODE_SKILL_ROOT/examples/build_widgetapp_example.py" ] && command -v python3 &>/dev/null; then
-            python3 -B "$MSICODE_SKILL_ROOT/examples/build_widgetapp_example.py" >/dev/null && \
-            python3 -B "$MSICODE_SKILL_ROOT/examples/build_addon_micro_installer.py" >/dev/null
-            if [ $? -ne 0 ]; then
-                echo "🛑 JENNA: ABORTING! msicode-dfm-ai-skill Python codec self-test failed."
-                exit 1
-            fi
-        fi
-
+    # 4.15 PUBLIC RAGGIESOFT INSTALLER STUDIO REPOSITORY PUSH (`/desktop-apps/installer-studio` -> github.com/raggiesoft/installer-studio)
+    # Note: Legacy vendor interoperability tools remain strictly offline/private and are NEVER pushed by Jenna.
+    echo "   -> Packaging Public RaggieSoft Installer Studio Repository (/desktop-apps/installer-studio)..."
+    if [ -d "$DESKTOP_INSTALLER_STUDIO_ROOT/.git" ]; then
+        cd "$DESKTOP_INSTALLER_STUDIO_ROOT"
         git add -A
 
         if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
             git commit -m "$COMMIT_MSG"
             if git remote get-url origin &>/dev/null; then
                 git push -u $FORCE_FLAG origin main
-                echo "      ✓ msicode-dfm-ai-skill repo committed and sent to GitHub."
+                echo "      ✓ installer-studio repo committed and sent to GitHub."
             else
-                echo "      ✓ msicode-dfm-ai-skill repo committed locally."
+                echo "      ✓ installer-studio repo committed locally."
             fi
         elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
-            echo "      ⚠️  Found pending msicode-dfm-ai-skill commits. Pushing now..."
+            echo "      ⚠️  Found pending installer-studio commits. Pushing now..."
             git push -u $FORCE_FLAG origin main
-            echo "      ✓ Pending msicode-dfm-ai-skill commits sent to GitHub."
+            echo "      ✓ Pending installer-studio commits sent to GitHub."
         else
-            echo "      (msicode-dfm-ai-skill repo is clean and up to date.)"
+            echo "      (installer-studio repo is clean and up to date.)"
         fi
     fi
 
