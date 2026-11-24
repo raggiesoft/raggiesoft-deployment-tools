@@ -581,6 +581,90 @@ for (const entry of fs.readdirSync(nm, { withFileTypes: true })) {
 NODEEOF
 }
 
+# Mirror Helper for macOS / Linux (`ensure_posix_native_npm_companions`):
+# When `npm install` was originally executed inside Windows 11 Pro (`Y:\`), Windows `npm`
+# writes POSIX shell shims in `node_modules/.bin/` without `+x` execute permissions and
+# installs `win32-arm64` / `win32-x64` native packages (`@esbuild/win32-arm64`,
+# `@rollup/rollup-win32-arm64-msvc`, etc.) without their `darwin-*` / `linux-*` siblings.
+# This helper restores `+x` on `.bin/*` and unpacks missing macOS/Linux sibling packages
+# side-by-side so BOTH macOS and Windows builds work simultaneously on shared `Y:\`!
+function ensure_posix_native_npm_companions() {
+    if [ "$IS_WINDOWS_GIT_BASH" = true ] || [ ! -d "./node_modules" ]; then
+        return 0
+    fi
+    chmod +x ./node_modules/.bin/* 2>/dev/null || true
+    node - <<'NODEEOF'
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const cp = require('child_process');
+
+const nm = path.resolve('node_modules');
+if (!fs.existsSync(nm)) process.exit(0);
+
+const plat = process.platform; // 'darwin' or 'linux'
+const cpu = process.arch === 'arm64' ? 'arm64' : 'x64';
+
+function findWinPkgs() {
+  const found = [];
+  for (const entry of fs.readdirSync(nm, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (entry.name.startsWith('@')) {
+      const scopeDir = path.join(nm, entry.name);
+      for (const sub of fs.readdirSync(scopeDir, { withFileTypes: true })) {
+        if (sub.isDirectory() && (sub.name.includes('win32-arm64') || sub.name.includes('win32-x64'))) {
+          found.push(`${entry.name}/${sub.name}`);
+        }
+      }
+    } else if (entry.name.includes('win32-arm64') || entry.name.includes('win32-x64')) {
+      found.push(entry.name);
+    }
+  }
+  return found;
+}
+
+function mapToPosixCandidates(winPkg) {
+  const stripped = winPkg.replace(/-msvc$/, '');
+  const replaced = stripped.replace(/win32-(arm64|x64)/, `${plat}-${cpu}`);
+  if (plat === 'linux') {
+    return [`${replaced}-gnu`, replaced];
+  }
+  return [replaced];
+}
+
+for (const wPkg of findWinPkgs()) {
+  const pkgJsonPath = path.join(nm, ...wPkg.split('/'), 'package.json');
+  if (!fs.existsSync(pkgJsonPath)) continue;
+  const ver = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8')).version;
+  const candidates = mapToPosixCandidates(wPkg);
+  if (candidates.some((c) => fs.existsSync(path.join(nm, ...c.split('/'), 'package.json')))) {
+    continue;
+  }
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rsw-npm-posix-'));
+  for (const cand of candidates) {
+    try {
+      console.log(`      [POSIX Dual-OS] Unpacking ${cand}@${ver} alongside ${wPkg}...`);
+      const tgzName = cp.execSync(`npm pack "${cand}@${ver}" --silent`, { cwd: tmpDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().split(/\r?\n/).pop();
+      if (tgzName) {
+        const destDir = path.join(nm, ...cand.split('/'));
+        fs.mkdirSync(destDir, { recursive: true });
+        cp.execFileSync('tar', ['-xzf', path.join(tmpDir, tgzName), '-C', destDir, '--strip-components=1']);
+        const subBin = path.join(destDir, 'bin');
+        if (fs.existsSync(subBin)) {
+          for (const f of fs.readdirSync(subBin)) {
+            try { fs.chmodSync(path.join(subBin, f), 0o755); } catch (_) {}
+          }
+        }
+        break;
+      }
+    } catch (_) {}
+  }
+  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+}
+NODEEOF
+    chmod +x ./node_modules/.bin/* 2>/dev/null || true
+}
+
 # Helper: Returns 0 (true = needs build) on macOS/Linux OR whenever `<dist_dir>` is missing
 # OR `<repo_dir>` has uncommitted working-tree changes; returns 1 (skip redundant SMB build)
 # on Windows Git Bash when `<repo_dir>` is 100% clean and already compiled!
@@ -609,8 +693,9 @@ function run_non_interactive_npm() {
             return 0
         fi
     fi
-    if [ "$1" = "run" ] && [ "$2" = "build" ]; then
+    if [ "$1" = "run" ] && [[ "$2" == "build" || "$2" == "check" ]]; then
         ensure_windows_native_npm_companions
+        ensure_posix_native_npm_companions
     fi
     yes 2>/dev/null | npm --yes "$@"
     return "${PIPESTATUS[1]}"
