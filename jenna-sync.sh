@@ -222,6 +222,7 @@ DESKTOP_A11Y_STUDIO_ROOT="$DESKTOP_APPS_ROOT/accessibility-studio"
 DESKTOP_INSTALLER_STUDIO_ROOT="$DESKTOP_APPS_ROOT/installer-studio"
 RAGGIESOFT_STUDIO_WEB_ROOT="$SERVER_ROOT/raggiesoftstudio.com/www"
 RAGGIESOFT_DEV_WEB_ROOT="$SERVER_ROOT/raggiesoft.dev/www"
+GITHUB_PROFILE_ROOT="$SERVER_ROOT/raggiesoft-github-profile"
 LOGS_DIR="$WORKSPACE_DIR/logs"
 
 # ============================================================================
@@ -1399,6 +1400,14 @@ function do_pull() {
     elif [ -d "$DESKTOP_INSTALLER_STUDIO_ROOT/.git" ] && (cd "$DESKTOP_INSTALLER_STUDIO_ROOT" && git remote get-url origin &>/dev/null); then
         cd "$DESKTOP_INSTALLER_STUDIO_ROOT" && git pull origin main
     fi
+
+    echo "   5.11 Checking GitHub Profile Spotlight Repository (raggiesoft/raggiesoft)..."
+    if [ ! -d "$GITHUB_PROFILE_ROOT" ]; then
+        mkdir -p "$SERVER_ROOT"
+        git clone https://github.com/raggiesoft/raggiesoft.git "$GITHUB_PROFILE_ROOT" 2>/dev/null || true
+    elif [ -d "$GITHUB_PROFILE_ROOT/.git" ] && (cd "$GITHUB_PROFILE_ROOT" && git remote get-url origin &>/dev/null); then
+        cd "$GITHUB_PROFILE_ROOT" && git pull origin main
+    fi
     
     # Pull public CDN assets down from DigitalOcean Spaces (`rclone sync <remote> <local>`),
     # excluding `.git/` and private `vault/`/`master-wav/` paths so local Git metadata isn't wiped!
@@ -2547,6 +2556,27 @@ function do_push() {
             echo "      ✓ Pending installer-studio commits sent to GitHub."
         else
             echo "      (installer-studio repo is clean and up to date.)"
+        fi
+    fi
+
+    # 4.16 GITHUB PROFILE SPOTLIGHT REPOSITORY PUSH (`/raggiesoft-servers/raggiesoft-github-profile` -> github.com/raggiesoft/raggiesoft)
+    echo "   -> Packaging GitHub Profile Spotlight Repository (raggiesoft/raggiesoft)..."
+    if [ -d "$GITHUB_PROFILE_ROOT/.git" ]; then
+        cd "$GITHUB_PROFILE_ROOT"
+        git add -A
+        if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
+            git commit -m "$COMMIT_MSG"
+            if git remote get-url origin &>/dev/null; then
+                git push -u $FORCE_FLAG origin main
+                echo "      ✓ GitHub Profile README committed and sent to GitHub."
+            else
+                echo "      ✓ GitHub Profile README committed locally."
+            fi
+        elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
+            git push -u $FORCE_FLAG origin main
+            echo "      ✓ Pending GitHub Profile README commits sent to GitHub."
+        else
+            echo "      (GitHub Profile README repo is clean and up to date.)"
         fi
     fi
 
