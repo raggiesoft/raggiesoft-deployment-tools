@@ -2443,16 +2443,19 @@ function do_push() {
                 # MSBuild `IncrementalClean` to delete `App.g.cs` mid-build), purge `obj/` first and pass `-m:1`!
                 local ST_OBJ_DIR="$DESKTOP_STORETRAINER_ROOT/dotnet-v2.0/StoreTrainer/obj"
                 local ST_CORE_OBJ_DIR="$DESKTOP_STORETRAINER_ROOT/dotnet-v2.0/RaggieSoft.Core/obj"
-                local ST_NORESTORE=""
+                local ST_NEEDS_RESTORE=true
                 if [ -d "$ST_OBJ_DIR" ]; then
                     if { [ "$IS_WINDOWS_GIT_BASH" != true ] && grep -rqE '[A-Za-z]:\\' "$ST_OBJ_DIR" "$ST_CORE_OBJ_DIR" 2>/dev/null; } || \
                        { [ "$IS_WINDOWS_GIT_BASH" = true ] && grep -rq '/Users/' "$ST_OBJ_DIR" "$ST_CORE_OBJ_DIR" 2>/dev/null; }; then
                         rm -rf "$ST_OBJ_DIR" "$ST_CORE_OBJ_DIR"
                     elif [ -f "$ST_OBJ_DIR/project.assets.json" ] && [ -f "$ST_CORE_OBJ_DIR/project.assets.json" ]; then
-                        ST_NORESTORE="--no-restore"
+                        ST_NEEDS_RESTORE=false
                     fi
                 fi
-                DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 "$DOTNET_BIN" build "$DESKTOP_STORETRAINER_ROOT/dotnet-v2.0/StoreTrainer/StoreTrainer.csproj" $ST_NORESTORE --disable-build-servers -m:1 -p:NuGetAudit=false --verbosity quiet
+                if [ "$ST_NEEDS_RESTORE" = true ]; then
+                    DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 "$DOTNET_BIN" restore "$DESKTOP_STORETRAINER_ROOT/dotnet-v2.0/StoreTrainer/StoreTrainer.csproj" --disable-build-servers -p:NuGetAudit=false --verbosity quiet
+                fi
+                DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 "$DOTNET_BIN" build "$DESKTOP_STORETRAINER_ROOT/dotnet-v2.0/StoreTrainer/StoreTrainer.csproj" --no-restore --disable-build-servers -m:1 -p:NuGetAudit=false --verbosity quiet
                 if [ $? -ne 0 ]; then
                     echo "🛑 JENNA: ABORTING! StoreTrainer 2.0 .NET 10 build failed."
                     exit 1
@@ -2493,22 +2496,25 @@ function do_push() {
             if [ -n "$DOTNET_BIN" ]; then
                 # Cross-OS Parallels Guard: Purge opposite-OS `obj/` directories (`C:\` / `Y:\` vs `/Users/`)
                 # across all `accessibility-studio` subprojects before running `dotnet build`!
-                local A11Y_NORESTORE="--no-restore"
+                local A11Y_NEEDS_RESTORE=false
                 local A11Y_SUB_OBJ
                 for A11Y_SUB_OBJ in "$DESKTOP_A11Y_STUDIO_ROOT"/src/*/obj "$DESKTOP_A11Y_STUDIO_ROOT"/tests/*/obj; do
                     if [ -d "$A11Y_SUB_OBJ" ]; then
                         if { [ "$IS_WINDOWS_GIT_BASH" != true ] && grep -rqE '[A-Za-z]:\\' "$A11Y_SUB_OBJ" 2>/dev/null; } || \
                            { [ "$IS_WINDOWS_GIT_BASH" = true ] && grep -rq '/Users/' "$A11Y_SUB_OBJ" 2>/dev/null; }; then
                             rm -rf "$A11Y_SUB_OBJ"
-                            A11Y_NORESTORE=""
+                            A11Y_NEEDS_RESTORE=true
                         fi
                     fi
                 done
                 if [ ! -f "$DESKTOP_A11Y_STUDIO_ROOT/src/AccessibilityStudio.WinForms/obj/project.assets.json" ] || \
                    [ ! -f "$DESKTOP_A11Y_STUDIO_ROOT/src/RaggieSoft.HelpViewer/obj/project.assets.json" ]; then
-                    A11Y_NORESTORE=""
+                    A11Y_NEEDS_RESTORE=true
                 fi
-                DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 "$DOTNET_BIN" build "$DESKTOP_A11Y_STUDIO_ROOT/RaggieSoftAccessibilityStudio.slnx" $A11Y_NORESTORE --disable-build-servers -m:1 -p:NuGetAudit=false --verbosity quiet
+                if [ "$A11Y_NEEDS_RESTORE" = true ]; then
+                    DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 "$DOTNET_BIN" restore "$DESKTOP_A11Y_STUDIO_ROOT/RaggieSoftAccessibilityStudio.slnx" --disable-build-servers -p:NuGetAudit=false --verbosity quiet
+                fi
+                DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 "$DOTNET_BIN" build "$DESKTOP_A11Y_STUDIO_ROOT/RaggieSoftAccessibilityStudio.slnx" --no-restore --disable-build-servers -m:1 -p:NuGetAudit=false --verbosity quiet
                 if [ $? -ne 0 ]; then
                     echo "🛑 JENNA: ABORTING! RaggieSoft Accessibility Studio .NET 10 build failed."
                     exit 1
