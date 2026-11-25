@@ -563,6 +563,13 @@ function registerPkgBins(pkgRelDir) {
     for (const [cmdName, relScript] of Object.entries(map)) {
       if (!cmdName || !relScript) continue;
       const cmdFile = path.join(binDir, `${cmdName}.cmd`);
+      if (cmdName === 'esbuild') {
+        const winEsbuildExe = path.join(nm, '@esbuild', `win32-${cpu}`, 'esbuild.exe');
+        if (fs.existsSync(winEsbuildExe)) {
+          fs.writeFileSync(cmdFile, `@ECHO off\r\n"%~dp0\\..\\@esbuild\\win32-${cpu}\\esbuild.exe" %*\r\n`, 'ascii');
+          continue;
+        }
+      }
       if (fs.existsSync(cmdFile)) continue;
       const winTarget = path.join('..', ...pkgRelDir.split('/'), ...String(relScript).split('/')).replace(/\//g, '\\');
       fs.writeFileSync(cmdFile, `@ECHO off\r\nnode "%~dp0\\${winTarget}" %*\r\n`, 'ascii');
