@@ -2681,6 +2681,62 @@ function do_push() {
             echo "⚠️  JENNA: DigitalOcean Spaces rclone sync reported an error."
         else
             echo "👱‍♀️ JENNA: Success! All public assets are synced 1:1 on the CDN (stale files pruned), and your local vaults remain safely off DigitalOcean Spaces. Sarah will pick this up shortly."
+            # ====================================================================
+            # 6b. AUTOMATIC CLOUDFLARE EDGE CACHE PURGE (`assets.raggiesoft.com` + Web Zones)
+            # ====================================================================
+            # WHY THIS MATTERS (PLAIN-ENGLISH CDN CACHING LESSON):
+            #   `assets.raggiesoft.com` sits behind Cloudflare's Orange-Cloud proxy
+            #   (`CNAME -> nyc3.digitaloceanspaces.com`). Without an edge cache purge,
+            #   Cloudflare data centers can keep serving an older cached `.exe`, `.msi`,
+            #   `.css`, or `.js` binary for hours even after `rclone sync` updates S3—
+            #   which would trip `Setup.exe`'s cryptographic `SHA-256` verification!
+            #   Passing the 32-hex Zone IDs directly skips slow domain-lookup pagination
+            #   and `--force` ensures zero interactive prompts in automated pipelines.
+            # ====================================================================
+            CF_CLI_BIN=""
+            if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+                # Prefer the POSIX `#!/bin/sh` shim (`$APPDATA/npm/cf`) over `cf.cmd` so GNU `timeout` (`execvp`) can invoke it directly:
+                if [ -n "$APPDATA" ] && [ -f "$(cygpath -u "$APPDATA")/npm/cf" ]; then
+                    CF_CLI_BIN="$(cygpath -u "$APPDATA")/npm/cf"
+                elif command -v cf >/dev/null 2>&1; then
+                    CF_CLI_BIN="$(type -P cf)"
+                fi
+            else
+                if command -v cf >/dev/null 2>&1; then
+                    CF_CLI_BIN="$(type -P cf)"
+                elif command -v cloudflare >/dev/null 2>&1; then
+                    CF_CLI_BIN="$(type -P cloudflare)"
+                fi
+            fi
+
+            if [ -n "$CF_CLI_BIN" ]; then
+                echo "👱‍♀️ JENNA: Purging Cloudflare edge caches (assets.raggiesoft.com + primary web zones)..."
+                CF_PURGE_TMP="${TMPDIR:-/tmp}/jenna-cf-purge-$$.json"
+                printf '{"purge_everything":true}\n' > "$CF_PURGE_TMP"
+                CF_PURGE_ARG="$CF_PURGE_TMP"
+                if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+                    CF_PURGE_ARG="$(cygpath -w "$CF_PURGE_TMP")"
+                fi
+                # Purge the 4 active software & asset Cloudflare zones by 32-hex ID:
+                # - 979ea3c457a16391f3788e6638240e61 = raggiesoft.com (+ assets.raggiesoft.com & *.raggiesoft.com)
+                # - 6f94bbbadae52531c939a58c42500221 = raggiesoftstudio.com
+                # - f3605214b95221ff04b9ed83120a0f1b = raggiesoft.dev
+                # - 00e401676b786ca147b1194e8ed6f981 = michaelpragsdale.com
+                for CF_ZONE_SPEC in \
+                    "979ea3c457a16391f3788e6638240e61:raggiesoft.com + assets.raggiesoft.com" \
+                    "6f94bbbadae52531c939a58c42500221:raggiesoftstudio.com" \
+                    "f3605214b95221ff04b9ed83120a0f1b:raggiesoft.dev" \
+                    "00e401676b786ca147b1194e8ed6f981:michaelpragsdale.com"; do
+                    CF_ZID="${CF_ZONE_SPEC%%:*}"
+                    CF_ZLABEL="${CF_ZONE_SPEC#*:}"
+                    if run_with_timeout 30 "$CF_CLI_BIN" cache purge --zone "$CF_ZID" --body "@$CF_PURGE_ARG" --force --quiet >/dev/null 2>&1; then
+                        echo "      ✓ Purged Cloudflare edge cache: $CF_ZLABEL"
+                    else
+                        echo "      ℹ️  Skipped Cloudflare purge for $CF_ZLABEL (cf auth offline or timed out)."
+                    fi
+                done
+                rm -f "$CF_PURGE_TMP"
+            fi
         fi
     else
         echo "👱‍♀️ JENNA: Finished! Code/narratives are committed (and pushed if GitHub was reachable); CDN sync was skipped because DigitalOcean Spaces is blocked on this WiFi."
