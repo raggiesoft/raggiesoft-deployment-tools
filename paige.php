@@ -553,6 +553,7 @@ $bookLoreFolderMap = [
     'beth'                      => ['lore/beth'],
     'fractured-prisms'          => ['lore/fractured-prisms'],
     'water-planet'              => ['lore/water-planet'],
+    'waystation'                => ['lore/waystation', 'backstage/books/waystation'],
 ];
 $bookMusicArtistMap = [
     'stardust-engine'  => 'the-stardust-engine',
