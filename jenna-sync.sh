@@ -2445,10 +2445,16 @@ function do_push() {
     echo "   -> Packaging Desktop StoreTrainer Repository (/desktop-apps/storetrainer)..."
     if [ -d "$DESKTOP_STORETRAINER_ROOT/.git" ]; then
         cd "$DESKTOP_STORETRAINER_ROOT"
-        # Non-interactive .NET 10 pre-push compile check if dotnet SDK is installed locally
+        # Non-interactive .NET 11 pre-push compile check if dotnet SDK is installed locally
         if [ -f "$DESKTOP_STORETRAINER_ROOT/dotnet-v2.0/StoreTrainer/StoreTrainer.csproj" ]; then
             local DOTNET_BIN=""
-            if command -v dotnet &>/dev/null; then
+            if [ -n "${LOCALAPPDATA:-}" ] && [ -x "$(cygpath -u "$LOCALAPPDATA/Microsoft/dotnet/dotnet.exe" 2>/dev/null)" ]; then
+                export PATH="$(cygpath -u "$LOCALAPPDATA/Microsoft/dotnet"):$PATH"
+                DOTNET_BIN="$(cygpath -u "$LOCALAPPDATA/Microsoft/dotnet/dotnet.exe")"
+            elif [ -x "$HOME/.dotnet/dotnet" ]; then
+                export PATH="$HOME/.dotnet:$PATH"
+                DOTNET_BIN="$HOME/.dotnet/dotnet"
+            elif command -v dotnet &>/dev/null; then
                 DOTNET_BIN="dotnet"
             elif [ -x "/opt/homebrew/bin/dotnet" ]; then
                 DOTNET_BIN="/opt/homebrew/bin/dotnet"
@@ -2464,7 +2470,7 @@ function do_push() {
                     if { [ "$IS_WINDOWS_GIT_BASH" != true ] && grep -rqE '[A-Za-z]:\\' "$ST_OBJ_DIR" "$ST_CORE_OBJ_DIR" 2>/dev/null; } || \
                        { [ "$IS_WINDOWS_GIT_BASH" = true ] && grep -rq '/Users/' "$ST_OBJ_DIR" "$ST_CORE_OBJ_DIR" 2>/dev/null; }; then
                         rm -rf "$ST_OBJ_DIR" "$ST_CORE_OBJ_DIR"
-                    elif [ -f "$ST_OBJ_DIR/project.assets.json" ] && [ -f "$ST_CORE_OBJ_DIR/project.assets.json" ]; then
+                    elif [ -f "$ST_OBJ_DIR/project.assets.json" ] && [ -f "$ST_CORE_OBJ_DIR/project.assets.json" ] && grep -q 'net11\.0' "$ST_OBJ_DIR/project.assets.json" 2>/dev/null; then
                         ST_NEEDS_RESTORE=false
                     fi
                 fi
@@ -2473,7 +2479,7 @@ function do_push() {
                 fi
                 DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 "$DOTNET_BIN" build "$DESKTOP_STORETRAINER_ROOT/dotnet-v2.0/StoreTrainer/StoreTrainer.csproj" --no-restore --disable-build-servers -m:1 -p:NuGetAudit=false --verbosity quiet
                 if [ $? -ne 0 ]; then
-                    echo "🛑 JENNA: ABORTING! StoreTrainer 2.0 .NET 10 build failed."
+                    echo "🛑 JENNA: ABORTING! StoreTrainer 2.0 .NET 11 build failed."
                     exit 1
                 fi
             fi
@@ -2504,7 +2510,13 @@ function do_push() {
         cd "$DESKTOP_A11Y_STUDIO_ROOT"
         if [ -f "$DESKTOP_A11Y_STUDIO_ROOT/RaggieSoftAccessibilityStudio.slnx" ]; then
             local DOTNET_BIN=""
-            if command -v dotnet &>/dev/null; then
+            if [ -n "${LOCALAPPDATA:-}" ] && [ -x "$(cygpath -u "$LOCALAPPDATA/Microsoft/dotnet/dotnet.exe" 2>/dev/null)" ]; then
+                export PATH="$(cygpath -u "$LOCALAPPDATA/Microsoft/dotnet"):$PATH"
+                DOTNET_BIN="$(cygpath -u "$LOCALAPPDATA/Microsoft/dotnet/dotnet.exe")"
+            elif [ -x "$HOME/.dotnet/dotnet" ]; then
+                export PATH="$HOME/.dotnet:$PATH"
+                DOTNET_BIN="$HOME/.dotnet/dotnet"
+            elif command -v dotnet &>/dev/null; then
                 DOTNET_BIN="dotnet"
             elif [ -x "/opt/homebrew/bin/dotnet" ]; then
                 DOTNET_BIN="/opt/homebrew/bin/dotnet"
@@ -2524,7 +2536,8 @@ function do_push() {
                     fi
                 done
                 if [ ! -f "$DESKTOP_A11Y_STUDIO_ROOT/src/AccessibilityStudio.WinForms/obj/project.assets.json" ] || \
-                   [ ! -f "$DESKTOP_A11Y_STUDIO_ROOT/src/RaggieSoft.HelpViewer/obj/project.assets.json" ]; then
+                   [ ! -f "$DESKTOP_A11Y_STUDIO_ROOT/src/RaggieSoft.HelpViewer/obj/project.assets.json" ] || \
+                   ! grep -q 'net11\.0' "$DESKTOP_A11Y_STUDIO_ROOT/src/AccessibilityStudio.WinForms/obj/project.assets.json" 2>/dev/null; then
                     A11Y_NEEDS_RESTORE=true
                 fi
                 if [ "$A11Y_NEEDS_RESTORE" = true ]; then
@@ -2532,7 +2545,7 @@ function do_push() {
                 fi
                 DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 "$DOTNET_BIN" build "$DESKTOP_A11Y_STUDIO_ROOT/RaggieSoftAccessibilityStudio.slnx" --no-restore --disable-build-servers -m:1 -p:NuGetAudit=false --verbosity quiet
                 if [ $? -ne 0 ]; then
-                    echo "🛑 JENNA: ABORTING! RaggieSoft Accessibility Studio .NET 10 build failed."
+                    echo "🛑 JENNA: ABORTING! RaggieSoft Accessibility Studio .NET 11 build failed."
                     exit 1
                 fi
             fi
