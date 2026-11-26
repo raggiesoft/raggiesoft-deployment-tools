@@ -1074,7 +1074,6 @@ function generate_sitemap() {
             \$networkHosts = [
                 'https://raggiesoft.com/sitemap.xml',
                 'https://launcher.raggiesoft.com/sitemap.xml',
-                'https://a11y.raggiesoft.com/sitemap.xml',
                 'https://books.raggiesoft.com/sitemap.xml',
                 'https://crossroads.raggiesoft.com/sitemap.xml',
                 'https://cedarrun.raggiesoft.com/sitemap.xml',
@@ -1165,7 +1164,6 @@ function submit_indexnow_pings() {
         "$WAYSTATION_ROOT/dist"
         "$JESSICA_ROOT/dist"
         "$LAUNCHER_ROOT/dist"
-        "$A11Y_ROOT/dist"
         "$RAGGIESOFT_STUDIO_WEB_ROOT/dist"
         "$RAGGIESOFT_DEV_WEB_ROOT/dist"
         "$NEBULAE_ROOT"
@@ -2223,45 +2221,50 @@ function do_push() {
         fi
     fi
 
-    # 4.9995 RAGGIESOFT ACCESSIBILITY STUDIO PUSH (`a11y.raggiesoft.com` — IBM Carbon Web Components + TypeScript + Vite Static SSG)
+    # 4.9995 RAGGIESOFT ACCESSIBILITY STUDIO SUB-APP BUILD (`raggiesoftstudio.com/accessibility-studio`, `301` target of `a11y.raggiesoft.com` — IBM Carbon + TS + Vite SSG)
+    A11Y_SUBAPP_DIRTY=false
     if [ -d "$A11Y_ROOT" ] && [ -f "$A11Y_ROOT/package.json" ]; then
-        echo "   -> Packaging RaggieSoft Accessibility Studio Portal (a11y.raggiesoft.com)..."
+        echo "   -> Packaging RaggieSoft Accessibility Studio Sub-Portal (raggiesoftstudio.com/accessibility-studio)..."
         cd "$A11Y_ROOT"
+        if [ -n "$(command git "${GIT_EXTRA_ARGS[@]}" status --porcelain 2>/dev/null)" ] || [ ! -d "$A11Y_ROOT/dist" ]; then
+            A11Y_SUBAPP_DIRTY=true
+        fi
         if [ ! -d "$A11Y_ROOT/node_modules" ]; then
             echo "      > Installing IBM Carbon Web Components + Styles + TypeScript + Vite dependencies non-interactively..."
             run_non_interactive_npm install
             if [ $? -ne 0 ]; then
-                echo "🛑 JENNA: ABORTING! npm install failed in a11y.raggiesoft.com."
+                echo "🛑 JENNA: ABORTING! npm install failed in subdomains/a11y."
                 exit 1
             fi
         fi
         run_non_interactive_npm run build
         if [ $? -ne 0 ]; then
-            echo "🛑 JENNA: ABORTING! IBM Carbon SSG build failed in a11y.raggiesoft.com."
+            echo "🛑 JENNA: ABORTING! IBM Carbon SSG build failed in subdomains/a11y."
             exit 1
         fi
         if [ -d "$A11Y_ROOT/.git" ]; then
             git add -A
             if ! git diff-index --quiet HEAD -- 2>/dev/null || ! git rev-parse --verify HEAD &>/dev/null; then
+                A11Y_SUBAPP_DIRTY=true
                 git commit -m "$COMMIT_MSG"
                 if git remote get-url origin &>/dev/null; then
                     git push -u $FORCE_FLAG origin main
-                    echo "      ✓ RaggieSoft Accessibility Studio Portal committed and sent to GitHub."
+                    echo "      ✓ RaggieSoft Accessibility Studio Sub-Portal committed and sent to GitHub."
                 else
-                    echo "      ✓ RaggieSoft Accessibility Studio Portal committed locally (awaiting GitHub 'origin' remote)."
+                    echo "      ✓ RaggieSoft Accessibility Studio Sub-Portal committed locally (awaiting GitHub 'origin' remote)."
                 fi
             elif git remote get-url origin &>/dev/null && ( ! git rev-parse --verify origin/main &>/dev/null || [ "$(git log origin/main..HEAD 2>/dev/null)" ] ); then
                 git push -u $FORCE_FLAG origin main
-                echo "      ✓ Pending RaggieSoft Accessibility Studio Portal code sent to GitHub."
+                echo "      ✓ Pending RaggieSoft Accessibility Studio Sub-Portal code sent to GitHub."
             else
-                echo "      (RaggieSoft Accessibility Studio Portal is clean and up to date.)"
+                echo "      (RaggieSoft Accessibility Studio Sub-Portal is clean and up to date.)"
             fi
         fi
     fi
 
-    # 4.9996 RAGGIESOFT INSTALLER STUDIO PORTAL PUSH (`raggiesoftstudio.com` + `installwithoutlimits.com` 301 — Alpine.js + TS + Vite Static SSG)
+    # 4.9996 RAGGIESOFT STUDIO PORTAL PUSH (`raggiesoftstudio.com` + `/accessibility-studio` + `installwithoutlimits.com` & `a11y.raggiesoft.com` 301s)
     if [ -d "$RAGGIESOFT_STUDIO_WEB_ROOT" ] && [ -f "$RAGGIESOFT_STUDIO_WEB_ROOT/package.json" ]; then
-        echo "   -> Packaging RaggieSoft Installer Studio Portal (raggiesoftstudio.com)..."
+        echo "   -> Packaging RaggieSoft Studio Portal (raggiesoftstudio.com + /accessibility-studio)..."
         cd "$RAGGIESOFT_STUDIO_WEB_ROOT"
         if [ ! -d "$RAGGIESOFT_STUDIO_WEB_ROOT/node_modules" ]; then
             echo "      > Installing Alpine.js + TypeScript + Vite dependencies non-interactively..."
@@ -2271,7 +2274,13 @@ function do_push() {
                 exit 1
             fi
         fi
-        run_non_interactive_npm run build
+        if [ "$A11Y_SUBAPP_DIRTY" = true ]; then
+            ensure_windows_native_npm_companions
+            ensure_posix_native_npm_companions
+            yes 2>/dev/null | npm --yes run build
+        else
+            run_non_interactive_npm run build
+        fi
         if [ $? -ne 0 ]; then
             echo "🛑 JENNA: ABORTING! Alpine.js SSG build failed in raggiesoftstudio.com."
             exit 1
