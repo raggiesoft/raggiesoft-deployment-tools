@@ -303,6 +303,11 @@ if [ ! -f "$METADATA_MD" ] || [ "$OVERWRITE" = true ] || [ "$MINTED_NEW_ISRC" = 
 * **Real-World DSP Release Date:** $REAL_RELEASE_DATE
 * **Already got an ISRC code? (US ISRC Prefix QTAHP):** $ISRC_CODE
 
+**DistroKid Store Selection Policy (EXCLUDE ANTI-AI STORES):**
+* [ ] **Tidal:** **UNCHECK / DO NOT DELIVER** *(Catalog pulled Nov 25, 2026 ahead of Dec 9, 2026 AI ban)*
+* [ ] **Beatport:** **LEAVE UNCHECKED / DO NOT DELIVER** *(Prohibits generative-AI audio)*
+* [ ] **Any other store refusing properly disclosed AI music:** **UNCHECK**
+
 **DistroKid AI Credits Questionnaire:**
 * **Did AI generate any part of this track?** Yes
 * **Which parts?**
@@ -334,7 +339,7 @@ if [ ! -f "$METADATA_MD" ] || [ "$OVERWRITE" = true ] || [ "$MINTED_NEW_ISRC" = 
 * **Commercial Rights:** 100% cleared via commercial-tier Suno Premium.
 * **Tri-License Model:**
   1. **CC BY-SA 4.0 International:** Open-culture sharing & remixing with attribution to *Michael P. Ragsdale / Engine Room Records / RaggieSoft Media*.
-  2. **Standard DSP Consumer License:** Personal streaming via Apple Music, Spotify, YouTube Music, Amazon Music, TIDAL, Pandora, Qobuz, and The Listening Room.
+  2. **Standard DSP Consumer License:** Personal streaming via Apple Music, Spotify, YouTube Music, Amazon Music, Pandora, Qobuz, and The Listening Room.
   3. **Direct Commercial Non-Exclusive Sync License:** Available via \`https://raggiesoft.com/raggiesoft-media/licensing/commercial\` for commercial productions waiving ShareAlike copyleft terms.
 * **Automated Content ID / Rights Manager:** Strictly opted out (Zero Content-ID Ambush Guarantee).
 * **Impersonation:** NONE. Synthetic vocals only.
