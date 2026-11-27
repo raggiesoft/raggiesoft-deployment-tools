@@ -579,6 +579,95 @@ $searchIndex = [];
 // Lookup map of all series eBook file sizes for `raggiesoft.com/subdomains/books/data/ebook-sizes.json`
 $allEbookSizes = [];
 
+/**
+ * ============================================================================
+ * IMMUTABLE SEPTEMBER 11, 2001 ZERO-IMAGES FATAL GUARDRAIL (`paige.php`)
+ * ============================================================================
+ * 100-LEVEL WALKTHROUGH (WHY THIS HARD GATE EXISTS):
+ *   Out of permanent respect for the real lives lost and affected on
+ *   Tuesday, September 11, 2001, ANY narrative part (`books/**`) or Backstage
+ *   dossier (`backstage/**`) whose `date:` takes place on September 11, 2001
+ *   is strictly and permanently prohibited from requesting, attaching, or
+ *   rendering ANY illustration—whether via YAML frontmatter (`image:`,
+ *   `images:`, `og_image:`, `ogImage:`), inline Markdown (`![alt](url)`), or
+ *   raw HTML (`<img ...>`), regardless of whether the image file exists yet.
+ *
+ *   If ANY `raggiesoft-narratives` work violates this rule, Paige immediately
+ *   emits a fatal error to `STDERR` and terminates with `exit(1)` BEFORE
+ *   copying a single file to the CDN or updating any route manifest!
+ */
+function isSeptember112001Date(string $dateStr): bool {
+    $d = trim($dateStr, " \t\n\r\0\x0B\"'");
+    if ($d === '') {
+        return false;
+    }
+    return (bool)preg_match(
+        '/(?:\b2001-0?9-11\b|\b0?9[\/\-]11[\/\-]2001\b|\bSept(?:ember)?\.?\s+11(?:th)?,?\s+2001\b|\b11\s+Sept(?:ember)?\.?,?\s+2001\b)/i',
+        $d
+    );
+}
+
+function assertSeptember11ZeroImagesGuardrail(string $absFilePath, string $rawMarkdown): void {
+    if (!preg_match('/^---([\s\S]*?)---/', ltrim($rawMarkdown), $fmMatch)) {
+        return;
+    }
+    $fm   = $fmMatch[1];
+    $body = (string)substr(ltrim($rawMarkdown), strlen($fmMatch[0]));
+
+    $dateVal = '';
+    if (preg_match('/^date:\s*(.+)$/mi', $fm, $dm)) {
+        $dateVal = trim($dm[1], " \t\n\r\0\x0B\"'");
+    }
+    if (!isSeptember112001Date($dateVal)) {
+        return;
+    }
+
+    // Check 1: Scalar or YAML-list `image:`, `images:`, `og_image:`, or `ogImage:` in frontmatter
+    $hasFrontmatterImage = (bool)preg_match(
+        '/^(?:image|images|og_image|ogImage):\s*(?:[^\s#][^\r\n]*|\r?\n\s*-\s*\S+)/mi',
+        $fm
+    );
+
+    // Strip fenced code blocks before checking prose body for inline `![...](...)` or `<img` tags
+    $bodyNoFences = (string)preg_replace('/```[\s\S]*?```/', '', $body);
+    $hasInlineMarkdownImage = (bool)preg_match('/!\[[^\]]*\]\([^)]+\)/', $bodyNoFences);
+    $hasRawHtmlImgTag       = (bool)preg_match('/<img\b/i', $bodyNoFences);
+
+    if ($hasFrontmatterImage || $hasInlineMarkdownImage || $hasRawHtmlImgTag) {
+        fwrite(
+            STDERR,
+            "\n🛑 FATAL GUARDRAIL ERROR [IMMUTABLE SEPTEMBER 11, 2001 ZERO-IMAGES RULE]:\n" .
+            "   File: {$absFilePath}\n" .
+            "   Date: {$dateVal}\n" .
+            "   Story sections and dossiers taking place on September 11, 2001 MUST NEVER contain\n" .
+            "   rendered images (`image:`, `images:`, `og_image:`, `![...](...)`, or `<img>`).\n" .
+            "   Aborting build across all raggiesoft-narratives works.\n\n"
+        );
+        exit(1);
+    }
+}
+
+// Run a library-wide pre-flight sweep across ALL `books/**` and `backstage/**` Markdown files
+// BEFORE copying or modifying any CDN shelf (even when `--book=<single-slug>` is passed!).
+foreach ([$sourceBooksDir, $narrativesRootDir . '/backstage'] as $guardScanRoot) {
+    if (!is_dir($guardScanRoot)) {
+        continue;
+    }
+    $guardIter = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($guardScanRoot, FilesystemIterator::SKIP_DOTS)
+    );
+    foreach ($guardIter as $guardFile) {
+        if (!$guardFile->isFile() || strtolower($guardFile->getExtension()) !== 'md') {
+            continue;
+        }
+        $gPath = $guardFile->getPathname();
+        $gRaw  = (string)@file_get_contents($gPath);
+        if ($gRaw !== '') {
+            assertSeptember11ZeroImagesGuardrail($gPath, $gRaw);
+        }
+    }
+}
+
 /*
  * ============================================================================
  * PRE-SCAN RAGGIESOFT BACKSTAGE DOSSIERS (`raggiesoft-narratives/backstage/`)

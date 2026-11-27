@@ -848,6 +848,34 @@ function run_integrity_check() {
                 }
             }
 
+            // Part C: Immutable September 11, 2001 Zero-Images Guardrail across ALL raggiesoft-narratives works
+            // Scans every `.md` manuscript in `raggiesoft-narratives/books/` and `raggiesoft-narratives/backstage/`.
+            // Any section dated September 11, 2001 containing `image:`, `images:`, `og_image:`, `ogImage:`,
+            // inline Markdown `![...](...)`, or `<img` triggers an immediate fatal QA abort (`exit(1)`).
+            \$narrRoot = \$serverRoot . '/raggiesoft-narratives';
+            foreach ([\$narrRoot . '/books', \$narrRoot . '/backstage'] as \$nDir) {
+                if (!is_dir(\$nDir)) { continue; }
+                \$nIter = new RecursiveIteratorIterator(new RecursiveDirectoryIterator(\$nDir, FilesystemIterator::SKIP_DOTS));
+                foreach (\$nIter as \$nFile) {
+                    if (!\$nFile->isFile() || strtolower(\$nFile->getExtension()) !== 'md') { continue; }
+                    \$nRaw = @file_get_contents(\$nFile->getPathname());
+                    if (!is_string(\$nRaw) || \$nRaw === '') { continue; }
+                    if (!preg_match('/^---([\\s\\S]*?)---/', ltrim(\$nRaw), \$nFmMatch)) { continue; }
+                    \$nFm = \$nFmMatch[1];
+                    if (!preg_match('/^date:\\s*(.+)\$/mi', \$nFm, \$nDm)) { continue; }
+                    \$nDate = trim(\$nDm[1], \" \\t\\n\\r\\0\\x0B\\\"'\");
+                    if (!preg_match('/(?:\\b2001-0?9-11\\b|\\b0?9[\\/\\-]11[\\/\\-]2001\\b|\\bSept(?:ember)?\\.?\\s+11(?:th)?,?\\s+2001\\b|\\b11\\s+Sept(?:ember)?\\.?,?\\s+2001\\b)/i', \$nDate)) { continue; }
+                    \$nBody = (string)preg_replace('/\`\`\`[\\s\\S]*?\`\`\`/', '', substr(ltrim(\$nRaw), strlen(\$nFmMatch[0])));
+                    \$nHasFmImg = (bool)preg_match('/^(?:image|images|og_image|ogImage):\\s*(?:[^\\s#][^\\r\\n]*|\\r?\\n\\s*-\\s*\\S+)/mi', \$nFm);
+                    \$nHasBodyImg = (bool)preg_match('/!\\[[^\\]]*\\]\\([^)]+\\)|<img\\b/i', \$nBody);
+                    if (\$nHasFmImg || \$nHasBodyImg) {
+                        \$nRel = ltrim(str_replace('\\\\', '/', substr(\$nFile->getPathname(), strlen(\$narrRoot))), '/');
+                        echo \"❌ FATAL 9/11 ZERO-IMAGES GUARDRAIL FAIL: [\$nRel] (date: \$nDate) contains an image tag or frontmatter image!\\n\";
+                        \$hasErrors = true;
+                    }
+                }
+            }
+
             if (\$hasErrors) { exit(1); }
             exit(0); 
         "
