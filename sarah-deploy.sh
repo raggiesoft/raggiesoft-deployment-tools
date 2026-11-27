@@ -843,6 +843,7 @@ function deploy_site() {
     REMOTE=$(git rev-parse origin/main)
 
     # Fast-path skip: if local commit == GitHub commit AND `/var/www/` isn't empty AND not `--force-reset`, return in <5ms!
+    SARAH_LAST_REPO_UPDATED=false
     if [ "$FORCE_RESET" = false ] && [ "$JUST_CLONED" = false ] && [ "$WEB_ROOT_EMPTY" = false ]; then
         if [ "$LOCAL" == "$REMOTE" ]; then
             return
@@ -853,6 +854,7 @@ function deploy_site() {
     else
         echo "👩‍💼 SARAH: Bypassing version check for $SITE_NAME. Purging local repository cache."
     fi
+    SARAH_LAST_REPO_UPDATED=true
 
     # Align local working tree 100% with `origin/main` (`git clean -fdx` also wipes untracked files during `--force-reset`)
     git reset --hard origin/main
@@ -1159,8 +1161,50 @@ sync_infra_repo "Accessibility Studio Source" "/home/michael/raggiesoft-a11y-stu
 # 18. PROCESS RAGGIESOFT STUDIO (`raggiesoftstudio.com` + `/accessibility-studio` + `installwithoutlimits.com` & `a11y.raggiesoft.com` 301s)
 deploy_site "RaggieSoft Studio" "/home/michael/raggiesoft-studio" "/var/www/raggiesoftstudio.com" "/home/michael/raggiesoft-studio/dist"
 
+# ==============================================================================
+# Helper: deploy_companion_webroot <site_name> <sync_dir> <web_root>
+# ==============================================================================
+# Syncs additional standalone `<subdomain>.raggiesoft.dev` portals built inside
+# an already-pulled parent repository (such as `/home/michael/raggiesoft-dev/build/*`)
+# into their own dedicated `/var/www/<subdomain>.raggiesoft.dev` Nginx web roots
+# whenever the parent repo updated (`SARAH_LAST_REPO_UPDATED=true`), `--force-reset`
+# was passed, or the target `/var/www/<subdomain>` folder was newly provisioned!
+function deploy_companion_webroot() {
+    local SUB_NAME="$1"
+    local SUB_SYNC_DIR="$2"
+    local SUB_WEB_ROOT="$3"
+
+    if [ ! -d "$SUB_SYNC_DIR" ]; then
+        return 0
+    fi
+
+    local SUB_EMPTY=false
+    if [ ! -d "$SUB_WEB_ROOT" ] || [ -z "$(ls -A "$SUB_WEB_ROOT" 2>/dev/null)" ]; then
+        SUB_EMPTY=true
+    fi
+
+    if [ "${SARAH_LAST_REPO_UPDATED:-false}" != "true" ] && [ "$FORCE_RESET" = false ] && [ "$SUB_EMPTY" = false ]; then
+        return 0
+    fi
+
+    echo "👩‍💼 SARAH: Syncing $SUB_NAME companion portal to $SUB_WEB_ROOT..."
+    mkdir -p "$SUB_WEB_ROOT" 2>/dev/null || true
+    rsync -av --delete --no-o --no-g \
+        --exclude '.git' \
+        --exclude '.gitignore' \
+        "$SUB_SYNC_DIR/" "$SUB_WEB_ROOT/"
+    minify_showroom "$SUB_WEB_ROOT"
+    find "$SUB_WEB_ROOT" -type d -exec chmod 755 {} +
+    find "$SUB_WEB_ROOT" -type f -exec chmod 644 {} +
+    notify_indexnow_for_webroot "$SUB_WEB_ROOT"
+    echo "✅ SARAH: $SUB_NAME Deployment Complete."
+}
+
 # 19. PROCESS RAGGIESOFT DEVELOPER HUB (`raggiesoft.dev` — Alpine.js + TS + Vite Static SSG `/dist`)
+#     PLUS Help Studio v0.6.0 Standalone `*.raggiesoft.dev` Portals (`build/raggiescript` & `build/finsharp`)!
 deploy_site "RaggieSoft Developer Hub" "/home/michael/raggiesoft-dev" "/var/www/raggiesoft.dev" "/home/michael/raggiesoft-dev/dist"
+deploy_companion_webroot "RaggieScript Docs (raggiescript.raggiesoft.dev)" "/home/michael/raggiesoft-dev/build/raggiescript" "/var/www/raggiescript.raggiesoft.dev"
+deploy_companion_webroot "Fin# Docs (finsharp.raggiesoft.dev)" "/home/michael/raggiesoft-dev/build/finsharp" "/var/www/finsharp.raggiesoft.dev"
 
 
 

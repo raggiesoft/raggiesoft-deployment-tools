@@ -1656,6 +1656,51 @@ function do_push() {
         fi
     fi
 
+    # 3.85 MANDATORY USAJOBS.GOV 2-PAGE RESUME CAP, STALE-PDF & BUCKET HYGIENE GATE
+    # Why run this check BEFORE pushing any repository or syncing S3 CDN?
+    #   1. USAJOBS.gov / OPM federal hiring rules disqualify or truncate resumes > 2 pages.
+    #   2. Public `raggiesoft-assets/portfolio/documents/resume/` must NEVER contain editable
+    #      `.docx`/`.doc` files or private `*-portal.*` phone-enabled resumes.
+    #   3. If `mragsdale-resume.md` was edited more recently than `mragsdale-resume.pdf`,
+    #      auto-rebuild via `build-resume.sh` (or abort if WeasyPrint/Pandoc are absent)
+    #      so the live public PDF can never silently drift behind Markdown edits!
+    RESUME_ASSETS_DIR="$ASSETS_ROOT/portfolio/documents/resume"
+    if [ -d "$RESUME_ASSETS_DIR" ] && [ -f "$RESUME_ASSETS_DIR/verify-pdf-508.py" ]; then
+        echo "👱‍♀️ JENNA: Verifying USAJOBS <= 2-Page Resume Cap, Section 508 PDF/UA-1 & Public Bucket Hygiene..."
+        if compgen -G "$RESUME_ASSETS_DIR/*.doc*" > /dev/null || compgen -G "$RESUME_ASSETS_DIR/*-portal*" > /dev/null; then
+            echo "🛑 JENNA: ABORTING! Private .docx/.doc or *-portal.* resume artifact detected inside public raggiesoft-assets/portfolio/documents/resume/!"
+            exit 1
+        fi
+
+        if [ -f "$RESUME_ASSETS_DIR/mragsdale-resume.md" ] && [ -f "$RESUME_ASSETS_DIR/mragsdale-resume.pdf" ]; then
+            if [ "$RESUME_ASSETS_DIR/mragsdale-resume.md" -nt "$RESUME_ASSETS_DIR/mragsdale-resume.pdf" ]; then
+                if command -v pandoc &>/dev/null && command -v weasyprint &>/dev/null; then
+                    echo "   -> mragsdale-resume.md is newer than mragsdale-resume.pdf; auto-rebuilding 2-page PDF/UA-1 & portal editions..."
+                    if ! "$RESUME_ASSETS_DIR/build-resume.sh"; then
+                        echo "🛑 JENNA: ABORTING! Resume rebuild failed USAJOBS 2-page cap or Section 508 verification."
+                        exit 1
+                    fi
+                else
+                    echo "🛑 JENNA: ABORTING! mragsdale-resume.md is newer than mragsdale-resume.pdf and pandoc/weasyprint are not installed on this machine."
+                    exit 1
+                fi
+            fi
+        fi
+
+        PY_VALIDATOR_BIN="$(command -v python3 || command -v python || true)"
+        if [ -n "$PY_VALIDATOR_BIN" ] && [ -f "$RESUME_ASSETS_DIR/mragsdale-resume.pdf" ]; then
+            RESUME_CHECK_TARGETS=("$RESUME_ASSETS_DIR/mragsdale-resume.pdf")
+            LOCAL_PORTAL_PDF="$WORKSPACE_ROOT/_resume/resumes/mragsdale-resume-portal.pdf"
+            LOCAL_PORTAL_DOCX="$WORKSPACE_ROOT/_resume/resumes/mragsdale-resume-portal.docx"
+            [ -f "$LOCAL_PORTAL_PDF" ] && RESUME_CHECK_TARGETS+=("$LOCAL_PORTAL_PDF")
+            [ -f "$LOCAL_PORTAL_DOCX" ] && RESUME_CHECK_TARGETS+=("$LOCAL_PORTAL_DOCX")
+            if ! "$PY_VALIDATOR_BIN" "$RESUME_ASSETS_DIR/verify-pdf-508.py" "${RESUME_CHECK_TARGETS[@]}"; then
+                echo "🛑 JENNA: ABORTING! Resume failed Mandatory USAJOBS 2-Page Maximum or Section 508 / PDF/UA-1 gate."
+                exit 1
+            fi
+        fi
+    fi
+
     # ============================================================================
     # HOW JENNA'S 3-BRANCH GIT COMMIT & PUSH IDIOM WORKS (REPEATED PER REPOSITORY):
     #   1. `git add .` (or `git add -A`) stages modified, added, and deleted files.
