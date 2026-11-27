@@ -32,7 +32,7 @@ done
 # Report any vocal tracks with audio that are awaiting Google Gemini Multimodal Audio-to-VTT alignment
 if [ -n "${TEMP_GEMINI_VTT_QUEUE:-}" ] && [ -s "$TEMP_GEMINI_VTT_QUEUE" ]; then
     VTT_QUEUE_COUNT=$(wc -l < "$TEMP_GEMINI_VTT_QUEUE" | tr -d '[:space:]')
-    echo "✨ HARPER -> GOOGLE GEMINI VTT HANDOFF: $VTT_QUEUE_COUNT vocal track(s) with audio are queued for Gemini Multimodal Audio-to-VTT generation (NOTE SYNC_TYPE: HUMAN_VERIFIED)."
+    echo "🎵 HARPER -> GOOGLE GEMINI VTT HANDOFF: $VTT_QUEUE_COUNT vocal track(s) with audio are queued for Gemini Multimodal Audio-to-VTT generation (NOTE SYNC_TYPE: HUMAN_VERIFIED)."
 fi
 
 # Delete temporary sorting/ISRC/queue scratch files and any `sed -i.bak` backup files

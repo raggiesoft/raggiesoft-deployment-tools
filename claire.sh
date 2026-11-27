@@ -27,7 +27,7 @@
 # "A messy studio is a slow studio. Let me clear the floor before Harper comes in."
 
 echo "🧹 CLAIRE: Good evening! I'll get this studio cleaned up and ready for Harper."
-echo "   ✨ Grabbing the trash bins..."
+echo "   🗑️  Grabbing the trash bins..."
 
 # Move into the directory containing `claire.sh` (`dirname "$0"`).
 # `|| exit` ensures that if `cd` fails for any reason, the script stops immediately
@@ -117,4 +117,4 @@ rm -f temp_catalog_index.jsonl
 rm -f temp_tracks_update.jsonl
 
 echo "🧹 CLAIRE: All done! The floors are swept, the legacy folders are in the dumpster, and the studio is spotless."
-echo "   ✨ You're all clear to call in Harper for a --rebuild."
+echo "   ✅ You're all clear to call in Harper for a --rebuild."

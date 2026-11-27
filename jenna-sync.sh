@@ -876,6 +876,49 @@ function run_integrity_check() {
                 }
             }
 
+            // Part D: Immutable Zero-AI-Shorthand Sparkle Glyph Guardrail (FATAL EXIT 1)
+            // Sparkle glyphs (ph-sparkle, fa-sparkles, fa-wand-magic-sparkles, book-sparkles,
+            // fa-stars, bi-stars, lucide-sparkles, and Unicode U+2728 SPARKLES) have become
+            // universal UI shorthand for AI-generated content. RaggieSoft permanently bans them across
+            // all web properties, narratives, catalogs, deployment tools, and desktop applications!
+            \$aiGlyphRegex = '/(?:\\bph-(?:sparkles?|magic-wand)\\b|\\bfa-(?:[a-z0-9-]+-)?sparkles?\\b|\\bfa-stars\\b|\\bbi-stars\\b|\\blucide-sparkles?\\b|\\bheroicons?-sparkles?\\b|(?:icon|iconName|name)\\s*[:=]\\s*[\\x22\\x27](?:(?:[a-z0-9-]+-)?sparkles?|stars)[\\x22\\x27]|\\x{2728})/u';
+            \$glyphScanRoots = array_merge(
+                \$webTargets,
+                [\$narrRoot . '/books', \$narrRoot . '/backstage', \$serverRoot . '/raggiesoft-assets/engine-room-records']
+            );
+            \$desktopRoot = realpath('../desktop-apps');
+            if (\$desktopRoot && is_dir(\$desktopRoot)) { \$glyphScanRoots[] = \$desktopRoot; }
+            \$deployToolsRoot = realpath('.');
+            if (\$deployToolsRoot && is_dir(\$deployToolsRoot)) { \$glyphScanRoots[] = \$deployToolsRoot; }
+
+            \$glyphSkipDirs = ['node_modules', '.git', '.venv', 'venv', 'vendor', 'fonts', 'phosphor', 'fontawesome', 'webawesome', 'bin', 'obj', 'dist', 'build', 'out', '.output', '.next', '.svelte-kit', '.ssr-temp', 'build-tools', 'raggiesoft-vaults'];
+            \$glyphAllowedExts = ['html', 'php', 'ts', 'tsx', 'js', 'mjs', 'svelte', 'astro', 'vue', 'njk', 'md', 'json', 'cs', 'xaml', 'cpp', 'hpp', 'rshp', 'rsip', 'rstp', 'rssc', 'sh', 'py', 'ps1'];
+
+            foreach (\$glyphScanRoots as \$gRoot) {
+                if (!\$gRoot || !is_dir(\$gRoot)) { continue; }
+                \$gDirIter = new RecursiveDirectoryIterator(\$gRoot, FilesystemIterator::SKIP_DOTS);
+                \$gFilterIter = new RecursiveCallbackFilterIterator(\$gDirIter, function (\$cur) use (\$glyphSkipDirs) {
+                    if (\$cur->isDir() && in_array(strtolower(\$cur->getFilename()), \$glyphSkipDirs, true)) {
+                        return false;
+                    }
+                    return true;
+                });
+                foreach (new RecursiveIteratorIterator(\$gFilterIter) as \$gFile) {
+                    if (!\$gFile->isFile()) { continue; }
+                    \$gBase = \$gFile->getFilename();
+                    if (\$gBase === 'jenna-sync.sh' || substr(\$gBase, -8) === '.min.css' || substr(\$gBase, -7) === '.min.js') { continue; }
+                    \$gExt = strtolower(\$gFile->getExtension());
+                    if (!in_array(\$gExt, \$glyphAllowedExts, true)) { continue; }
+                    \$gTxt = @file_get_contents(\$gFile->getPathname());
+                    if (!is_string(\$gTxt) || \$gTxt === '') { continue; }
+                    if (preg_match(\$aiGlyphRegex, \$gTxt, \$gMatch)) {
+                        \$gPathNorm = str_replace('\\\\', '/', \$gFile->getPathname());
+                        echo \"❌ FATAL AI-SHORTHAND SPARKLE GLYPH FAIL: [\$gPathNorm] contains banned AI-shorthand glyph '\" . \$gMatch[0] . \"'! Replace with a domain-specific non-sparkle icon.\\n\";
+                        \$hasErrors = true;
+                    }
+                }
+            }
+
             if (\$hasErrors) { exit(1); }
             exit(0); 
         "

@@ -1497,6 +1497,101 @@ foreach ($narrativeDirs as $narrativeDir) {
         }
         unset($cxGroup);
 
+        // Step 2B: Discover optional Diamond Convergence (`"rejoin_part": "e001/c002/p001.md"`) targets!
+        // Plain-English Explanation:
+        //   Sometimes multiple Story Crossroads branches explore different journeys (for example, staying
+        //   home in Chesapeake vs. boarding a cross-country Pathfinder coach to Pasco or Seattle) and then
+        //   reconverge onto a single shared chapter later in the novel (`e001/c002/p001.md`).
+        //   By extracting the shared root `e*` chapters from `rejoin_part` up through the next root Crossroads
+        //   (and appending an `#rejoin-<segId>` Era URL suffix onto branch copies so Web, SwiftUI, and WPF
+        //   Table-of-Contents mergers place the rejoined chapters chronologically AFTER the branch), all
+        //   branches flow seamlessly into the shared continuation with zero native-app model changes!
+        $rejoinTargetsByRel = [];
+        foreach ($rawCxList as $rawCxScan) {
+            foreach (($rawCxScan['options'] ?? []) as $rawOptScan) {
+                $rejoinRelRaw = ltrim(str_replace('\\', '/', trim((string)($rawOptScan['rejoin_part'] ?? ''))), '/');
+                if ($rejoinRelRaw !== '' && isset($seriesPartsByRelPath[$rejoinRelRaw])) {
+                    $rejoinTargetsByRel[$rejoinRelRaw] = $seriesPartsByRelPath[$rejoinRelRaw];
+                }
+            }
+        }
+
+        // Helper: Compares two `(era, chap, part)` 3-tuples (`< 0` if `$a` is earlier, `0` if equal, `> 0` if later).
+        $comparePartCoords = static function (int $eA, int $cA, int $pA, int $eB, int $cB, int $pB): int {
+            if ($eA !== $eB) return $eA <=> $eB;
+            if ($cA !== $cB) return $cA <=> $cB;
+            return $pA <=> $pB;
+        };
+
+        // Pre-slice each `rejoin_part` target from root `$tocBooks` up through the first root Crossroads at/after `rejoin_part`.
+        $rejoinSlicesByRel = [];
+        $sharedPostRejoinRelPaths = [];
+        $rootCxsSorted = $crossroadsByContainer[''] ?? [];
+        foreach ($rejoinTargetsByRel as $rjRel => $rjMeta) {
+            $rjEra = (int)$rjMeta['era_num'];
+            $rjChap = (int)$rjMeta['chap_num'];
+            $rjPart = (int)$rjMeta['part_num'];
+
+            // Find the earliest root Crossroads whose trigger is at or after `$rjMeta` (if any).
+            $nextRootCxAfterRejoin = null;
+            $stopEra = 999999;
+            $stopChap = 999999;
+            $stopPart = 999999;
+            foreach ($rootCxsSorted as $candRootCx) {
+                $cm = $candRootCx['_trig_meta'];
+                if ($comparePartCoords((int)$cm['era_num'], (int)$cm['chap_num'], (int)$cm['part_num'], $rjEra, $rjChap, $rjPart) >= 0) {
+                    $nextRootCxAfterRejoin = trim((string)$candRootCx['id']);
+                    $stopEra = (int)$cm['era_num'];
+                    $stopChap = (int)$cm['chap_num'];
+                    $stopPart = (int)$cm['part_num'];
+                    break;
+                }
+            }
+
+            // Filter `$tocBooks` to parts within `[$rjMeta .. $stopMeta]` (inclusive on both ends).
+            $slicedEras = [];
+            foreach ($tocBooks as $srcEra) {
+                $eN = (int)($srcEra['era_num'] ?? 0);
+                if ($eN < $rjEra || $eN > $stopEra) continue;
+                $slicedChaps = [];
+                foreach (($srcEra['chapters'] ?? []) as $srcChap) {
+                    $cN = (int)($srcChap['chap_num'] ?? 0);
+                    $slicedParts = [];
+                    foreach (($srcChap['parts'] ?? []) as $srcPart) {
+                        $pN = (int)($srcPart['part_num'] ?? 0);
+                        if ($comparePartCoords($eN, $cN, $pN, $rjEra, $rjChap, $rjPart) >= 0 &&
+                            $comparePartCoords($eN, $cN, $pN, $stopEra, $stopChap, $stopPart) <= 0) {
+                            $slicedParts[] = $srcPart;
+                            $fpRel = (string)($srcPart['file_path'] ?? '');
+                            if ($fpRel !== '') {
+                                $sharedPostRejoinRelPaths[$fpRel] = true;
+                            }
+                        }
+                    }
+                    if (!empty($slicedParts)) {
+                        $cCopy = $srcChap;
+                        $cCopy['parts'] = $slicedParts;
+                        $cCopy['word_count'] = array_sum(array_column($slicedParts, 'word_count'));
+                        $cCopy['illustration_count'] = array_sum(array_map(static fn($p) => (int)($p['image_count'] ?? (!empty($p['image']) ? 1 : 0)), $slicedParts));
+                        $slicedChaps[] = $cCopy;
+                    }
+                }
+                if (!empty($slicedChaps)) {
+                    $eCopy = $srcEra;
+                    $eCopy['chapters'] = $slicedChaps;
+                    $eCopy['word_count'] = array_sum(array_column($slicedChaps, 'word_count'));
+                    $eCopy['illustration_count'] = array_sum(array_column($slicedChaps, 'illustration_count'));
+                    $slicedEras[] = $eCopy;
+                }
+            }
+
+            $rejoinSlicesByRel[$rjRel] = [
+                'eras'               => $slicedEras,
+                'next_crossroads_id' => $nextRootCxAfterRejoin,
+                'meta'               => $rjMeta,
+            ];
+        }
+
         // Step 3: Splits an Era/Chapter/Part tree cleanly into `[$preEras, $postEras]` right at `($trigEra, $trigChap, $trigPart)`
         // so chapters up through the Crossroads trigger belong to the parent segment, and any inline continuation parts belong to `$postEras`.
         $splitErasAtTrigger = static function (array $sourceEras, int $trigEra, int $trigChap, int $trigPart): array {
@@ -1571,51 +1666,93 @@ foreach ($narrativeDirs as $narrativeDir) {
             ?string $nextCrossroadsId,
             array $requiredChoices,
             ?array $optionMeta,
-            ?string $prevTriggerRouteUrl
-        ) use (&$routeData, &$compiledSegmentsMap, &$compiledPathsMap, $seriesSlug, $seriesMeta, &$seriesPartsByRelPath): array {
+            ?string $prevTriggerRouteUrl,
+            array $defaultChoicesForShared = []
+        ) use (&$routeData, &$compiledSegmentsMap, &$compiledPathsMap, $seriesSlug, $seriesMeta, &$seriesPartsByRelPath, $sharedPostRejoinRelPaths, $rejoinTargetsByRel): array {
             $isRootSeg = ($segmentId === '__root__');
             $segPathId = $isRootSeg ? null : $segmentId;
             $segCxId   = $optionMeta['crossroads_id'] ?? null;
 
             $segPartRoutes = [];
+            $segPartRelPaths = [];
             $segPartEntries = [];
             $segWords = 0;
             $segHeroImg = '/raggiesoft-books/images/covers/og/' . $seriesSlug . '.jpg';
             $foundHero = false;
 
             foreach ($segEras as &$se) {
-                if ($segPathId !== null) {
+                $eraHasNonShared = false;
+                foreach (($se['chapters'] ?? []) as $chkSc) {
+                    foreach (($chkSc['parts'] ?? []) as $chkSp) {
+                        if (empty($sharedPostRejoinRelPaths[(string)($chkSp['file_path'] ?? '')])) {
+                            $eraHasNonShared = true;
+                            break 2;
+                        }
+                    }
+                }
+                if ($segPathId !== null && $eraHasNonShared) {
                     $se['path_id'] = $segPathId;
                     $se['required_choices'] = (object)$requiredChoices;
                 }
                 foreach ($se['chapters'] as &$sc) {
-                    if ($segPathId !== null) {
+                    $chapHasNonShared = false;
+                    foreach (($sc['parts'] ?? []) as $chkSp2) {
+                        if (empty($sharedPostRejoinRelPaths[(string)($chkSp2['file_path'] ?? '')])) {
+                            $chapHasNonShared = true;
+                            break;
+                        }
+                    }
+                    if ($segPathId !== null && $chapHasNonShared) {
                         $sc['path_id'] = $segPathId;
                         $sc['required_choices'] = (object)$requiredChoices;
                     }
                     foreach ($sc['parts'] as &$sp) {
-                        if ($segPathId !== null) {
-                            $sp['path_id'] = $segPathId;
-                        }
-                        if (!empty($requiredChoices)) {
-                            $sp['required_choices'] = (object)$requiredChoices;
+                        $spRelFp = (string)($sp['file_path'] ?? '');
+                        $isSharedPostRejoin = !empty($sharedPostRejoinRelPaths[$spRelFp]);
+                        if (!$isSharedPostRejoin) {
+                            if ($segPathId !== null) {
+                                $sp['path_id'] = $segPathId;
+                            }
+                            if (!empty($requiredChoices)) {
+                                $sp['required_choices'] = (object)$requiredChoices;
+                            }
                         }
                         $fullRUrl = '/raggiesoft-books/books' . $sp['url'];
                         if (isset($routeData[$fullRUrl])) {
-                            if ($segPathId !== null) {
-                                $routeData[$fullRUrl]['pathId'] = $segPathId;
-                            }
-                            if ($segCxId !== null) {
-                                $routeData[$fullRUrl]['crossroadsId'] = $segCxId;
-                            }
-                            if (!empty($requiredChoices)) {
-                                $routeData[$fullRUrl]['requiredChoices'] = (object)$requiredChoices;
+                            if (!$isSharedPostRejoin) {
+                                if ($segPathId !== null) {
+                                    $routeData[$fullRUrl]['pathId'] = $segPathId;
+                                }
+                                if ($segCxId !== null) {
+                                    $routeData[$fullRUrl]['crossroadsId'] = $segCxId;
+                                }
+                                if (!empty($requiredChoices)) {
+                                    $routeData[$fullRUrl]['requiredChoices'] = (object)$requiredChoices;
+                                }
+                                if (!empty($defaultChoicesForShared)) {
+                                    $routeData[$fullRUrl]['defaultChoices'] = (object)$defaultChoicesForShared;
+                                }
+                            } else {
+                                // Shared post-rejoin chapter: NEVER stamp a single branch's `pathId` or `requiredChoices`
+                                // (which would overwrite the reader's chosen pre-rejoin branch cookie!). Instead, store
+                                // `defaultChoices` for cold deep-link visitors who arrive with empty cookies (preferring
+                                // the root inline continuation's `$defaultChoicesForShared` when present).
+                                if (!empty($defaultChoicesForShared)) {
+                                    $routeData[$fullRUrl]['defaultChoices'] = (object)$defaultChoicesForShared;
+                                } elseif (!empty($requiredChoices) && empty($routeData[$fullRUrl]['defaultChoices'])) {
+                                    $routeData[$fullRUrl]['defaultChoices'] = (object)$requiredChoices;
+                                }
                             }
                         }
                         $segPartRoutes[] = $fullRUrl;
+                        $segPartRelPaths[] = $spRelFp;
                         $segPartEntries[] = $sp;
-                        $segWords += (int)($sp['word_count'] ?? 0);
-                        if (!$foundHero && !empty($sp['image'])) {
+                        // Only count branch-owned parts toward the option card's word/part preview badge so the
+                        // Crossroads chooser displays the exact length of each branch before convergence!
+                        if (!$isSharedPostRejoin || empty($optionMeta['rejoin_part'])) {
+                            $segWords += (int)($sp['word_count'] ?? 0);
+                        }
+                        if (!$foundHero && !empty($sp['image']) && (!$isSharedPostRejoin || empty($optionMeta['rejoin_part']))) {
                             $segHeroImg = (string)$sp['image'];
                             $foundHero = true;
                         }
@@ -1627,22 +1764,38 @@ foreach ($narrativeDirs as $narrativeDir) {
             unset($se);
 
             $segCount = count($segPartRoutes);
+            $branchOwnedPartCount = 0;
             foreach ($segPartRoutes as $idx => $rUrl) {
+                $curRelFp = $segPartRelPaths[$idx] ?? '';
+                if (empty($sharedPostRejoinRelPaths[$curRelFp]) || empty($optionMeta['rejoin_part'])) {
+                    $branchOwnedPartCount++;
+                }
                 if (!isset($routeData[$rUrl])) {
                     continue;
                 }
+                // If this part is a diamond-convergence `rejoin_part` (e.g. `e001/c002/p001.md`) and `$idx > 0`,
+                // record this segment's final pre-rejoin URL in `rejoinPrevBySegment` so `oliver.php`'s
+                // Previous button steps back to whichever Earth branch the reader actually came from!
+                if (isset($rejoinTargetsByRel[$curRelFp]) && $idx > 0) {
+                    if (!isset($routeData[$rUrl]['rejoinPrevBySegment']) || !is_array($routeData[$rUrl]['rejoinPrevBySegment'])) {
+                        $routeData[$rUrl]['rejoinPrevBySegment'] = [];
+                    }
+                    $routeData[$rUrl]['rejoinPrevBySegment'][$segmentId] = $segPartRoutes[$idx - 1];
+                }
+
                 if ($idx === 0) {
                     if ($prevTriggerRouteUrl !== null && $prevTriggerRouteUrl !== '') {
                         $routeData[$rUrl]['prevUrl'] = $prevTriggerRouteUrl;
                     } else {
                         $routeData[$rUrl]['noPrev'] = true;
                     }
-                } else {
+                } elseif (!isset($rejoinTargetsByRel[$curRelFp]) || empty($routeData[$rUrl]['prevUrl'])) {
                     $routeData[$rUrl]['prevUrl'] = $segPartRoutes[$idx - 1];
                 }
 
                 if ($idx < $segCount - 1) {
                     $routeData[$rUrl]['nextUrl'] = $segPartRoutes[$idx + 1];
+                    unset($routeData[$rUrl]['noNext']);
                 } else {
                     if ($nextCrossroadsId !== null || empty($seriesMeta['next_series_url'])) {
                         $routeData[$rUrl]['noNext'] = true;
@@ -1656,6 +1809,7 @@ foreach ($narrativeDirs as $narrativeDir) {
             $entryUrl = isset($seriesPartsByRelPath[$entryPart])
                 ? (string)$seriesPartsByRelPath[$entryPart]['url']
                 : (string)($segPartEntries[0]['url'] ?? '');
+            $displayPartCount = $branchOwnedPartCount > 0 ? $branchOwnedPartCount : $segCount;
             $readingMins = max(1, (int)ceil($segWords / 250));
 
             $segmentRecord = [
@@ -1668,7 +1822,7 @@ foreach ($narrativeDirs as $narrativeDir) {
                 'next_crossroads_id' => $nextCrossroadsId,
                 'required_choices'   => (object)$requiredChoices,
                 'forbidden_terms'    => $optionMeta['forbidden_terms'] ?? [],
-                'part_count'         => $segCount,
+                'part_count'         => $displayPartCount,
                 'word_count'         => $segWords,
                 'reading_minutes'    => $readingMins,
                 'image'              => $segHeroImg,
@@ -1691,14 +1845,18 @@ foreach ($narrativeDirs as $narrativeDir) {
             string $currentSegId,
             array $inheritedChoices,
             ?array $currentOptMeta,
-            ?string $incomingTriggerRouteUrl
+            ?string $incomingTriggerRouteUrl,
+            array $inheritedDefaultChoices = []
         ) use (
             &$sliceContainerIntoSegments,
             &$compiledCrossroadsById,
             $crossroadsByContainer,
             $containerTrees,
             $splitErasAtTrigger,
-            $finalizeNarrativeSegment
+            $finalizeNarrativeSegment,
+            $rejoinSlicesByRel,
+            $rejoinTargetsByRel,
+            $comparePartCoords
         ): void {
             $containerCxs = $crossroadsByContainer[$containerKey] ?? [];
             foreach ($containerCxs as $rawCx) {
@@ -1707,6 +1865,28 @@ foreach ($narrativeDirs as $narrativeDir) {
                 $triggerRel = (string)$rawCx['_trigger_rel'];
                 $trigRouteUrl = (string)$trigMeta['route_url'];
                 $trigStandaloneUrl = (string)$trigMeta['url'];
+
+                // If we are in the root container (`""`) and `$trigMeta` occurs AT OR AFTER a diamond-convergence
+                // `rejoin_part` (meaning multiple earlier branches all converged before this Crossroads!), clear
+                // `$inheritedChoices` into `$inheritedDefaultChoices` so choosing a downstream option here NEVER
+                // overwrites the reader's earlier branch cookie!
+                if ($containerKey === '' && !empty($inheritedChoices) && !empty($rejoinTargetsByRel)) {
+                    foreach ($rejoinTargetsByRel as $rjMetaChk) {
+                        if ($comparePartCoords(
+                            (int)$trigMeta['era_num'],
+                            (int)$trigMeta['chap_num'],
+                            (int)$trigMeta['part_num'],
+                            (int)$rjMetaChk['era_num'],
+                            (int)$rjMetaChk['chap_num'],
+                            (int)$rjMetaChk['part_num']
+                        ) >= 0) {
+                            $inheritedDefaultChoices = array_merge($inheritedDefaultChoices, $inheritedChoices);
+                            $inheritedChoices = [];
+                            break;
+                        }
+                    }
+                }
+
                 $cxParentChoices = $inheritedChoices;
 
                 [$preEras, $postEras] = $splitErasAtTrigger(
@@ -1722,7 +1902,8 @@ foreach ($narrativeDirs as $narrativeDir) {
                     $cxId,
                     $cxParentChoices,
                     $currentOptMeta,
-                    $incomingTriggerRouteUrl
+                    $incomingTriggerRouteUrl,
+                    $inheritedDefaultChoices
                 );
 
                 $compiledOptions = [];
@@ -1740,12 +1921,16 @@ foreach ($narrativeDirs as $narrativeDir) {
                     $optEntryPartHint = !empty($rawOpt['entry_part'])
                         ? ltrim(str_replace('\\', '/', trim((string)$rawOpt['entry_part'])), '/')
                         : '';
+                    $optRejoinPart = !empty($rawOpt['rejoin_part'])
+                        ? ltrim(str_replace('\\', '/', trim((string)$rawOpt['rejoin_part'])), '/')
+                        : '';
                     $optMeta = [
                         'id'              => $optId,
                         'crossroads_id'   => $cxId,
                         'label'           => $optLabel,
                         'subtitle'        => $optSubtitle,
                         'entry_part'      => $optEntryPartHint,
+                        'rejoin_part'     => $optRejoinPart,
                         'forbidden_terms' => is_array($rawOpt['forbidden_terms'] ?? null) ? array_values($rawOpt['forbidden_terms']) : [],
                     ];
 
@@ -1760,7 +1945,8 @@ foreach ($narrativeDirs as $narrativeDir) {
                             $optId,
                             $optChoices,
                             $optMeta,
-                            $trigRouteUrl
+                            $trigRouteUrl,
+                            $inheritedDefaultChoices
                         );
                         $compiledOptions[] = ['_opt_id' => $optId];
                     } elseif ($optType === 'inline_continuation') {
@@ -1798,13 +1984,34 @@ foreach ($narrativeDirs as $narrativeDir) {
             }
 
             if ($currentSegId !== '' && !empty($workingEras)) {
+                $leafNextCxId = null;
+                $leafEras = $workingEras;
+                $rejoinTargetRel = trim((string)($currentOptMeta['rejoin_part'] ?? ''));
+                if ($rejoinTargetRel !== '' && isset($rejoinSlicesByRel[$rejoinTargetRel])) {
+                    $rjBundle = $rejoinSlicesByRel[$rejoinTargetRel];
+                    $leafNextCxId = $rjBundle['next_crossroads_id'];
+                    foreach ($rjBundle['eras'] as $rjEraItem) {
+                        // Append `#rejoin-<segId>` onto `era_url` so TOC mergers in Web (`isabel.php`),
+                        // macOS SwiftUI, and Windows WPF place the rejoined shared chapters chronologically
+                        // AFTER this branch's own chapters rather than folding them backwards into `__root__`!
+                        $rjEraClone = $rjEraItem;
+                        $rjEraClone['era_url'] = (string)($rjEraItem['era_url'] ?? '') . '#rejoin-' . $currentSegId;
+                        $leafEras[] = $rjEraClone;
+                    }
+                }
+                // Note: If `$containerKey === ''` (inline root segment that already crossed a `rejoin_part`
+                // before any later Crossroads), pass `$inheritedChoices` as `$defaultChoicesForShared` too!
+                $effectiveDefaults = !empty($inheritedDefaultChoices)
+                    ? $inheritedDefaultChoices
+                    : ($containerKey === '' ? $inheritedChoices : []);
                 $finalizeNarrativeSegment(
                     $currentSegId,
-                    $workingEras,
-                    null,
+                    $leafEras,
+                    $leafNextCxId,
                     $inheritedChoices,
                     $currentOptMeta,
-                    $incomingTriggerRouteUrl
+                    $incomingTriggerRouteUrl,
+                    $effectiveDefaults
                 );
             }
         };
@@ -1834,6 +2041,11 @@ foreach ($narrativeDirs as $narrativeDir) {
                         $relFp = (string)($chkPart['file_path'] ?? '');
                         $absFp = $narrativeDir . '/' . $relFp;
                         if ($relFp === '' || !is_file($absFp)) {
+                            continue;
+                        }
+                        // Shared post-rejoin chapters (`e001/c002/p001.md`+) belong to the converged trunk,
+                        // not exclusively to a single pre-rejoin branch's `story_path` or `forbidden_terms`.
+                        if (!empty($sharedPostRejoinRelPaths[$relFp])) {
                             continue;
                         }
                         $rawFileText = (string)@file_get_contents($absFp);
@@ -2246,6 +2458,11 @@ foreach ($narrativeDirs as $narrativeDir) {
             }
             if (isset($val['nextUrl'])) {
                 $val['nextUrl'] = str_replace('/raggiesoft-books/books', '', $val['nextUrl']);
+            }
+            if (isset($val['rejoinPrevBySegment']) && is_array($val['rejoinPrevBySegment'])) {
+                foreach ($val['rejoinPrevBySegment'] as $rjSegKey => $rjPrevVal) {
+                    $val['rejoinPrevBySegment'][$rjSegKey] = str_replace('/raggiesoft-books/books', '', (string)$rjPrevVal);
+                }
             }
             $newRouteData[$newKey] = $val;
         }

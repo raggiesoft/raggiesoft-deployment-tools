@@ -404,7 +404,7 @@ if [ -f "$LYRIC_MD" ]; then
         echo "         🛡️   Existing VTT detected in build folder ($LYRIC_VTT)! Back-syncing to lyrics/."
         cp "$LYRIC_VTT" "$SOURCE_VTT"
     elif [ -s "$LYRIC_TXT" ] && { [ -f "$WAV_FILE" ] || [ -f "$SOURCE_WAV" ]; } && [ "$NO_VTT" = false ]; then
-        echo "         ✨  HARPER -> GEMINI VTT QUEUE: '$TAG_TITLE' ($FILE_BASE) has audio + lyrics and is ready for Google Gemini Multimodal VTT alignment."
+        echo "         🎵  HARPER -> GEMINI VTT QUEUE: '$TAG_TITLE' ($FILE_BASE) has audio + lyrics and is ready for Google Gemini Multimodal VTT alignment."
         if [ -n "${TEMP_GEMINI_VTT_QUEUE:-}" ]; then
             echo "$ARTIST_SLUG/$ALBUM_SLUG/$FILE_BASE" >> "$TEMP_GEMINI_VTT_QUEUE"
         fi

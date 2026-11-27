@@ -430,7 +430,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         <?php /* PHP alternate template syntax (`if (...): ... endif;`) conditionally renders HTML */ ?>
         <?php if ($message === "SUCCESS"): ?>
             <div class="hud-panel hud-success" role="alert">
-                <h2>✨ Master Tracks Pressed Successfully</h2>
+                <h2>✅ Master Tracks Pressed Successfully</h2>
                 <p>Audrey has successfully compiled your multi-disc metadata layers into memory. Scroll to the footer of the console to pull your generated source files.</p>
             </div>
         <?php endif; ?>
