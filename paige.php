@@ -1867,9 +1867,11 @@ foreach ($narrativeDirs as $narrativeDir) {
                 $trigStandaloneUrl = (string)$trigMeta['url'];
 
                 // If we are in the root container (`""`) and `$trigMeta` occurs AT OR AFTER a diamond-convergence
-                // `rejoin_part` (meaning multiple earlier branches all converged before this Crossroads!), clear
-                // `$inheritedChoices` into `$inheritedDefaultChoices` so choosing a downstream option here NEVER
-                // overwrites the reader's earlier branch cookie!
+                // `rejoin_part` (meaning multiple earlier branches all converged before this Crossroads!), keep
+                // `$segmentRequiredChoices` for any non-shared pre-rejoin parts inside `$preEras` (such as `p010.md`
+                // before `p011.md`), while moving `$inheritedChoices` into `$inheritedDefaultChoices` and clearing
+                // `$cxParentChoices` so choosing a downstream option here NEVER overwrites an earlier branch cookie!
+                $segmentRequiredChoices = $inheritedChoices;
                 if ($containerKey === '' && !empty($inheritedChoices) && !empty($rejoinTargetsByRel)) {
                     foreach ($rejoinTargetsByRel as $rjMetaChk) {
                         if ($comparePartCoords(
@@ -1900,7 +1902,7 @@ foreach ($narrativeDirs as $narrativeDir) {
                     $currentSegId,
                     $preEras,
                     $cxId,
-                    $cxParentChoices,
+                    $segmentRequiredChoices,
                     $currentOptMeta,
                     $incomingTriggerRouteUrl,
                     $inheritedDefaultChoices
