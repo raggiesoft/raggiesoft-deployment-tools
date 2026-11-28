@@ -317,6 +317,18 @@ function countReadableProseWords(string $markdownText, bool $stripFrontmatter = 
     if ($stripFrontmatter) {
         $text = (string)preg_replace('/^\s*---\s*\R.*?\R---\s*\R?/su', ' ', $text, 1);
     }
+    // Resolve Story Crossroads route-conditional `<!-- @if-path: ... -->` / `<!-- @if-not-path: ... -->`
+    // (and `:::if-path[...]`) blocks to their default branch when counting single-pass chapter words.
+    $text = (string)preg_replace_callback(
+        '/^[ \t]*<!--[ \t]*@(if-path|if-not-path):\s*([^>]+?)[ \t]*-->[ \t]*\R([\s\S]*?)(?:^[ \t]*<!--[ \t]*@else[ \t]*-->[ \t]*\R([\s\S]*?))?^[ \t]*<!--[ \t]*@endif[ \t]*-->[ \t]*\R?/m',
+        static fn($m) => strtolower(trim((string)$m[1])) === 'if-not-path' ? (string)$m[3] : (isset($m[4]) ? (string)$m[4] : (string)$m[3]),
+        $text
+    );
+    $text = (string)preg_replace_callback(
+        '/^[ \t]*:::if-path\[([^\]]+)\][ \t]*\R([\s\S]*?)(?:^[ \t]*:::else[ \t]*\R([\s\S]*?))?^[ \t]*:::endif[ \t]*\R?/m',
+        static fn($m) => isset($m[3]) ? (string)$m[3] : (string)$m[2],
+        $text
+    );
     // Strip Markdown images ![alt](url)
     $text = (string)preg_replace('/!\[[^\]]*\]\([^)]*\)/u', ' ', $text);
     // Replace Markdown links [label](url) with their visible label
@@ -1094,19 +1106,64 @@ foreach ($narrativeDirs as $narrativeDir) {
                             $partSummary = trim($mSum[1], " \t\n\r\0\x0B\"'");
                         }
 
-                        // Mini Line-by-Line State Machine for YAML Scalar OR Multi-Item `- ...` Lists:
-                        // Handles both `image: "/foo.jpg"` AND multi-line `images:\n  - "/a.jpg"\n  - "/b.jpg"`
-                        // (plus `image_alt` / `image_alts` and `backstage` dossier links) without needing a C YAML extension!
+                        // Mini Line-by-Line State Machine for YAML Scalars, `- ...` Lists, & 2-Level `*_by_path:` Maps:
+                        // Handles `image: "/foo.jpg"`, multi-line `images:\n  - "/a.jpg"`, `image_by_path:` /
+                        // `image_alt_by_path:` / `theme_by_path:` maps, `image_when_matched`, and `backstage` links!
                         $fmImageUrls = [];
                         $fmImageAlts = [];
+                        $fmCondImageUrls = [];
+                        $fmCondImageAlts = [];
+                        $fmImageByPathMap = [];
+                        $fmImageAltByPathMap = [];
                         $fmLines = preg_split('/\r\n|\r|\n/', $frontmatterRaw);
                         $currentListKey = null;
+                        $currentMapKey = null;
+                        $currentMapSubKey = null;
                         foreach ($fmLines as $fmLine) {
+                            $isIndentedFm = ($fmLine !== '' && ($fmLine[0] === ' ' || $fmLine[0] === "\t"));
+                            if ($isIndentedFm && $currentMapKey !== null) {
+                                $trimInd = trim($fmLine);
+                                if ($trimInd === '' || str_starts_with($trimInd, '#')) continue;
+                                if (str_starts_with($trimInd, '-') && $currentMapSubKey !== null) {
+                                    $itemVal = trim(substr($trimInd, 1), " \t\"'");
+                                    if ($itemVal !== '') {
+                                        if ($currentMapKey === 'image_by_path') {
+                                            $fmImageByPathMap[$currentMapSubKey][] = $itemVal;
+                                        } elseif ($currentMapKey === 'image_alt_by_path') {
+                                            $fmImageAltByPathMap[$currentMapSubKey][] = $itemVal;
+                                        }
+                                    }
+                                    continue;
+                                }
+                                if (strpos($trimInd, ':') !== false) {
+                                    list($subK, $subV) = explode(':', $trimInd, 2);
+                                    $subK = trim($subK, " \t\"'");
+                                    $subV = trim($subV);
+                                    if ($subV === '') {
+                                        $currentMapSubKey = $subK;
+                                    } else {
+                                        $currentMapSubKey = null;
+                                        $cleanSubV = trim($subV, " \t\"'");
+                                        if ($cleanSubV !== '') {
+                                            if ($currentMapKey === 'image_by_path') {
+                                                $fmImageByPathMap[$subK][] = $cleanSubV;
+                                            } elseif ($currentMapKey === 'image_alt_by_path') {
+                                                $fmImageAltByPathMap[$subK][] = $cleanSubV;
+                                            }
+                                        }
+                                    }
+                                    continue;
+                                }
+                            }
                             if (preg_match('/^([a-zA-Z0-9_-]+):\s*(.*)$/', $fmLine, $kvMatch)) {
                                 $k = strtolower(trim($kvMatch[1]));
                                 $v = trim($kvMatch[2]);
                                 $currentListKey = null;
-                                if ($k === 'image' || $k === 'images') {
+                                $currentMapKey = null;
+                                $currentMapSubKey = null;
+                                if (in_array($k, ['image_by_path', 'image_alt_by_path', 'theme_by_path'], true) && $v === '') {
+                                    $currentMapKey = $k;
+                                } elseif ($k === 'image' || $k === 'images') {
                                     if ($v === '') {
                                         $currentListKey = 'image';
                                     } else {
@@ -1119,6 +1176,20 @@ foreach ($narrativeDirs as $narrativeDir) {
                                     } else {
                                         $cleanVal = trim($v, "\"'");
                                         if ($cleanVal !== '') $fmImageAlts[] = $cleanVal;
+                                    }
+                                } elseif ($k === 'image_when_matched') {
+                                    if ($v === '') {
+                                        $currentListKey = 'image_when_matched';
+                                    } else {
+                                        $cleanVal = trim($v, "\"'");
+                                        if ($cleanVal !== '') $fmCondImageUrls[] = $cleanVal;
+                                    }
+                                } elseif ($k === 'image_alt_when_matched') {
+                                    if ($v === '') {
+                                        $currentListKey = 'image_alt_when_matched';
+                                    } else {
+                                        $cleanVal = trim($v, "\"'");
+                                        if ($cleanVal !== '') $fmCondImageAlts[] = $cleanVal;
                                     }
                                 } elseif ($k === 'backstage') {
                                     if ($v === '') {
@@ -1135,6 +1206,10 @@ foreach ($narrativeDirs as $narrativeDir) {
                                         $fmImageUrls[] = $itemVal;
                                     } elseif ($currentListKey === 'image_alt') {
                                         $fmImageAlts[] = $itemVal;
+                                    } elseif ($currentListKey === 'image_when_matched') {
+                                        $fmCondImageUrls[] = $itemVal;
+                                    } elseif ($currentListKey === 'image_alt_when_matched') {
+                                        $fmCondImageAlts[] = $itemVal;
                                     } elseif ($currentListKey === 'backstage') {
                                         $cleanBs = trim($itemVal, "/ \t\"'");
                                         if ($cleanBs !== '') $partBackstageSlugs[] = $cleanBs;
@@ -1142,6 +1217,15 @@ foreach ($narrativeDirs as $narrativeDir) {
                                 }
                             } elseif (preg_match('/^\S/', $fmLine)) {
                                 $currentListKey = null;
+                                $currentMapKey = null;
+                                $currentMapSubKey = null;
+                            }
+                        }
+                        foreach ($fmImageByPathMap as $bpKey => $bpUrls) {
+                            $bpAlts = $fmImageAltByPathMap[$bpKey] ?? [];
+                            foreach ($bpUrls as $bpIdx => $bpUrl) {
+                                $fmCondImageUrls[] = $bpUrl;
+                                $fmCondImageAlts[] = $bpAlts[$bpIdx] ?? ($bpAlts[0] ?? '');
                             }
                         }
 
@@ -1158,6 +1242,25 @@ foreach ($narrativeDirs as $narrativeDir) {
                                     'src' => $normSrc,
                                     'alt' => $fmImageAlts[$idx] ?? ($fmImageAlts[0] ?? '')
                                 ];
+                            }
+                        }
+                        // Also register any `image_when_matched` route-conditional plates in `$partImages`
+                        // (after primary slides so default `image[0]` stays Slide 0 while offline book packages
+                        // and the Illustrations gallery include every conditional plate too!).
+                        $seenFmSrcs = array_column($partImages, 'src');
+                        foreach ($fmCondImageUrls as $cIdx => $cImgUrl) {
+                            $normSrc = preg_replace('/#.*$/', '', str_replace(['{{CDN}}', '{{cms}}', 'https://assets.raggiesoft.com'], '', trim($cImgUrl)));
+                            $cleanRel = ltrim($normSrc, '/');
+                            if ($cleanRel !== '' && strpos($cleanRel, 'raggiesoft-books/') !== 0 && strpos($cleanRel, 'raggiesoft-lore/') !== 0 && strpos($cleanRel, 'engine-room-records/') !== 0 && strpos($cleanRel, 'stardust-engine/images/') !== 0) {
+                                $cleanRel = 'raggiesoft-books/images/scenes/' . preg_replace('#^scenes/#', '', $cleanRel);
+                            }
+                            $normSrc = '/' . $cleanRel;
+                            if ($normSrc !== '/' && !in_array($normSrc, $seenFmSrcs, true) && is_file($serverRoot . '/raggiesoft-assets' . $normSrc)) {
+                                $partImages[] = [
+                                    'src' => $normSrc,
+                                    'alt' => $fmCondImageAlts[$cIdx] ?? ($fmCondImageAlts[0] ?? '')
+                                ];
+                                $seenFmSrcs[] = $normSrc;
                             }
                         }
                     }
@@ -1221,8 +1324,19 @@ foreach ($narrativeDirs as $narrativeDir) {
                     $eraIllustrationCount += $partImgCount;
                     $seriesIllustrationCount += $partImgCount;
 
-                    // Strip HTML and Markdown syntax from `$bodyWithoutFrontmatter` to build the plain-text `$searchIndex` entry
-                    $cleanBody = strip_tags($bodyWithoutFrontmatter);
+                    // Strip Story Crossroads `@if-path` / `:::if-path` directives, HTML, and Markdown syntax
+                    // from `$bodyWithoutFrontmatter` (keeping the default branch) to build `$searchIndex` & `$partExcerpt`!
+                    $bodyForSearchAndExcerpt = (string)preg_replace_callback(
+                        '/^[ \t]*<!--[ \t]*@(if-path|if-not-path):\s*([^>]+?)[ \t]*-->[ \t]*\R([\s\S]*?)(?:^[ \t]*<!--[ \t]*@else[ \t]*-->[ \t]*\R([\s\S]*?))?^[ \t]*<!--[ \t]*@endif[ \t]*-->[ \t]*\R?/m',
+                        static fn($m) => strtolower(trim((string)$m[1])) === 'if-not-path' ? (string)$m[3] : (isset($m[4]) ? (string)$m[4] : ''),
+                        (string)$bodyWithoutFrontmatter
+                    );
+                    $bodyForSearchAndExcerpt = (string)preg_replace_callback(
+                        '/^[ \t]*:::if-path\[([^\]]+)\][ \t]*\R([\s\S]*?)(?:^[ \t]*:::else[ \t]*\R([\s\S]*?))?^[ \t]*:::endif[ \t]*\R?/m',
+                        static fn($m) => isset($m[3]) ? (string)$m[3] : '',
+                        $bodyForSearchAndExcerpt
+                    );
+                    $cleanBody = strip_tags($bodyForSearchAndExcerpt);
                     $cleanBody = preg_replace('/[#_*\[\]>]/', '', $cleanBody);
                     $cleanBody = preg_replace('/\s+/', ' ', $cleanBody);
                     $cleanBody = trim($cleanBody);
@@ -1230,7 +1344,7 @@ foreach ($narrativeDirs as $narrativeDir) {
                     // Extract a clean ~215-character excerpt cut neatly on the last space (`mb_strrpos`) for Wikipedia-style hovercards
                     $partExcerpt = $partSummary;
                     if ($partExcerpt === '') {
-                        $proseBody = preg_replace('/!\[[^\]]*\]\([^)]*\)/', '', $bodyWithoutFrontmatter);
+                        $proseBody = preg_replace('/!\[[^\]]*\]\([^)]*\)/', '', $bodyForSearchAndExcerpt);
                         $proseBody = preg_replace('/\[([^\]]+)\]\([^)]*\)/', '$1', $proseBody);
                         $proseBody = preg_replace('/^#+\s+.*$/m', '', $proseBody);
                         $proseBody = preg_replace('/^---+\s*$/m', '', $proseBody);
@@ -2028,6 +2142,120 @@ foreach ($narrativeDirs as $narrativeDir) {
         //   1. Every file inside `paths/<branch>/` MUST declare `story_path: "<branch>"` in its YAML frontmatter.
         //   2. Zero lines may match any sibling branch's `forbidden_terms` (unless listed in `allow_in`).
         //   3. Zero Markdown links `[...](...paths/<other-branch>/...)` may cross into a sibling branch!
+        // Helper for Step 5's Anti-Bleed Gate: strips inactive `<!-- @if-path: ... -->`, `<!-- @if-not-path: ... -->`,
+        // `<!-- @else -->`, `<!-- @endif -->` (and YAML `*_by_path:` keys for other paths) relative to `$allowedSet`,
+        // replacing excluded lines with blank `\n` lines so 1-based `$lineNum` error reporting stays 100% exact!
+        $blankLinesPreservingCount = static fn(string $chunk): string => str_repeat("\n", substr_count($chunk, "\n"));
+        $filterMarkdownForSegmentAntiBleed = static function (string $rawText, array $allowedLookup) use ($blankLinesPreservingCount): string {
+            // 1. Blank out inactive indented keys inside YAML `image_by_path:` / `image_alt_by_path:` / `theme_by_path:`
+            if (preg_match('/^---([\s\S]*?)---/u', $rawText, $fmM)) {
+                $fmOrig = $fmM[0];
+                $fmLines = explode("\n", $fmOrig);
+                $inByPathMap = false;
+                $activeSubAllowed = true;
+                foreach ($fmLines as $li => &$fL) {
+                    if ($li === 0 || trim($fL) === '---') continue;
+                    $indented = ($fL !== '' && ($fL[0] === ' ' || $fL[0] === "\t"));
+                    if (!$indented && preg_match('/^([a-zA-Z0-9_-]+):\s*(.*)$/', $fL, $km)) {
+                        $inByPathMap = in_array(strtolower(trim($km[1])), ['image_by_path', 'image_alt_by_path', 'theme_by_path'], true) && trim($km[2]) === '';
+                        $activeSubAllowed = true;
+                    } elseif ($indented && $inByPathMap) {
+                        $tr = trim($fL);
+                        if (!str_starts_with($tr, '-') && strpos($tr, ':') !== false) {
+                            list($sk,) = explode(':', $tr, 2);
+                            $sk = trim($sk, " \t\"'");
+                            $activeSubAllowed = false;
+                            foreach (array_filter(array_map('trim', explode(',', $sk))) as $tok) {
+                                if (str_starts_with($tok, '!')) {
+                                    if (empty($allowedLookup[trim(substr($tok, 1))])) { $activeSubAllowed = true; break; }
+                                } elseif (!empty($allowedLookup[$tok])) {
+                                    $activeSubAllowed = true; break;
+                                }
+                            }
+                            if (!$activeSubAllowed) $fL = '';
+                        } elseif (str_starts_with($tr, '-') && !$activeSubAllowed) {
+                            $fL = '';
+                        }
+                    }
+                }
+                unset($fL);
+                $rawText = implode("\n", $fmLines) . substr($rawText, strlen($fmOrig));
+            }
+
+            // 2. Evaluate `<!-- @if-path: ... -->` / `<!-- @if-not-path: ... -->` blocks, replacing comment directives
+            //    and inactive branches with exact newline counts so active line numbers never shift!
+            $filtered = (string)preg_replace_callback(
+                '/^([ \t]*<!--[ \t]*@(if-path|if-not-path):\s*([^>]+?)[ \t]*-->[ \t]*\R)([\s\S]*?)(?:^([ \t]*<!--[ \t]*@else[ \t]*-->[ \t]*\R)([\s\S]*?))?^([ \t]*<!--[ \t]*@endif[ \t]*-->[ \t]*(?:\R|$))/m',
+                static function (array $m) use ($allowedLookup, $blankLinesPreservingCount): string {
+                    $openTag  = (string)$m[1];
+                    $isNot    = (strtolower(trim((string)$m[2])) === 'if-not-path');
+                    $expr     = trim((string)$m[3]);
+                    $thenBody = (string)$m[4];
+                    $elseTag  = $m[5] ?? '';
+                    $elseBody = $m[6] ?? '';
+                    $endTag   = (string)$m[7];
+
+                    $tokens = array_filter(array_map('trim', explode(',', $expr)), static fn($t) => $t !== '');
+                    $condMatched = false;
+                    if ($isNot) {
+                        $condMatched = true;
+                        foreach ($tokens as $tok) {
+                            $cleanTok = ltrim($tok, '!');
+                            if ($cleanTok !== '' && !empty($allowedLookup[$cleanTok])) {
+                                $condMatched = false;
+                                break;
+                            }
+                        }
+                    } else {
+                        foreach ($tokens as $tok) {
+                            if (str_starts_with($tok, '!')) {
+                                $neg = trim(substr($tok, 1));
+                                if ($neg !== '' && empty($allowedLookup[$neg])) { $condMatched = true; break; }
+                            } elseif (!empty($allowedLookup[$tok])) {
+                                $condMatched = true; break;
+                            }
+                        }
+                    }
+
+                    return $blankLinesPreservingCount($openTag)
+                        . ($condMatched ? $thenBody : $blankLinesPreservingCount($thenBody))
+                        . $blankLinesPreservingCount((string)$elseTag)
+                        . (!$condMatched ? (string)$elseBody : $blankLinesPreservingCount((string)$elseBody))
+                        . $blankLinesPreservingCount($endTag);
+                },
+                $rawText
+            );
+
+            // 3. Also evaluate any `:::if-path[...]` blocks with exact newline preservation
+            $filtered = (string)preg_replace_callback(
+                '/^([ \t]*:::if-path\[([^\]]+)\][ \t]*\R)([\s\S]*?)(?:^([ \t]*:::else[ \t]*\R)([\s\S]*?))?^([ \t]*:::endif[ \t]*(?:\R|$))/m',
+                static function (array $m) use ($allowedLookup, $blankLinesPreservingCount): string {
+                    $openTag  = (string)$m[1];
+                    $expr     = trim((string)$m[2]);
+                    $thenBody = (string)$m[3];
+                    $elseTag  = $m[4] ?? '';
+                    $elseBody = $m[5] ?? '';
+                    $endTag   = (string)$m[6];
+                    $condMatched = false;
+                    foreach (array_filter(array_map('trim', explode(',', $expr))) as $tok) {
+                        if (str_starts_with($tok, '!')) {
+                            if (empty($allowedLookup[trim(substr($tok, 1))])) { $condMatched = true; break; }
+                        } elseif (!empty($allowedLookup[$tok])) {
+                            $condMatched = true; break;
+                        }
+                    }
+                    return $blankLinesPreservingCount($openTag)
+                        . ($condMatched ? $thenBody : $blankLinesPreservingCount($thenBody))
+                        . $blankLinesPreservingCount((string)$elseTag)
+                        . (!$condMatched ? (string)$elseBody : $blankLinesPreservingCount((string)$elseBody))
+                        . $blankLinesPreservingCount($endTag);
+                },
+                $filtered
+            );
+
+            return $filtered;
+        };
+
         $bleedViolations = [];
         foreach ($compiledSegmentsMap as $segCheckId => $segCheck) {
             if ($segCheckId === '__root__') {
@@ -2036,6 +2264,7 @@ foreach ($narrativeDirs as $narrativeDir) {
             $segForbiddenTerms = is_array($segCheck['forbidden_terms'] ?? null) ? $segCheck['forbidden_terms'] : [];
             $allowedPathIds = array_values((array)($segCheck['required_choices'] ?? []));
             $allowedPathIds[] = $segCheckId;
+            $allowedPathLookup = array_fill_keys($allowedPathIds, true);
 
             foreach (($segCheck['eras'] ?? []) as $chkEra) {
                 foreach (($chkEra['chapters'] ?? []) as $chkChap) {
@@ -2045,20 +2274,20 @@ foreach ($narrativeDirs as $narrativeDir) {
                         if ($relFp === '' || !is_file($absFp)) {
                             continue;
                         }
-                        // Shared post-rejoin chapters (`e001/c002/p001.md`+) belong to the converged trunk,
-                        // not exclusively to a single pre-rejoin branch's `story_path` or `forbidden_terms`.
-                        if (!empty($sharedPostRejoinRelPaths[$relFp])) {
-                            continue;
-                        }
+                        $isSharedPostRejoinPart = !empty($sharedPostRejoinRelPaths[$relFp]);
                         $rawFileText = (string)@file_get_contents($absFp);
-                        if (str_starts_with($relFp, 'paths/')) {
+                        if (!$isSharedPostRejoinPart && str_starts_with($relFp, 'paths/')) {
                             $pathSegs = explode('/', $relFp);
                             $expectedDirSlug = $pathSegs[1] ?? '';
                             if ($expectedDirSlug !== '' && !preg_match('/^\s*story_path:\s*["\']?' . preg_quote($expectedDirSlug, '/') . '["\']?\s*$/m', $rawFileText)) {
                                 $bleedViolations[] = "{$seriesSlug}/{$relFp}: Missing or mismatched `story_path: \"{$expectedDirSlug}\"` in YAML frontmatter.";
                             }
                         }
-                        $lines = preg_split('/\R/', $rawFileText) ?: [];
+                        // Strip inactive `@if-path` / `@if-not-path` blocks for `$segCheckId` BEFORE scanning `$segForbiddenTerms`,
+                        // allowing shared post-rejoin chapters AND downstream branches to include guarded `@if-path` continuity
+                        // while STILL catching any unguarded cross-branch bleed with exact line numbers!
+                        $segmentFilteredText = $filterMarkdownForSegmentAntiBleed($rawFileText, $allowedPathLookup);
+                        $lines = preg_split('/\R/', $segmentFilteredText) ?: [];
                         foreach ($lines as $lineZeroIdx => $lineStr) {
                             $lineNum = $lineZeroIdx + 1;
                             foreach ($segForbiddenTerms as $fRule) {
