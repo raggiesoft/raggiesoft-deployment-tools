@@ -2662,7 +2662,9 @@ function do_push() {
                     fi
                 done
                 if [ ! -f "$DESKTOP_A11Y_STUDIO_ROOT/src/AccessibilityStudio.WinForms/obj/project.assets.json" ] || \
+                   [ ! -f "$DESKTOP_A11Y_STUDIO_ROOT/src/AccessibilityStudio.Core/obj/project.assets.json" ] || \
                    [ ! -f "$DESKTOP_A11Y_STUDIO_ROOT/src/RaggieSoft.HelpViewer/obj/project.assets.json" ] || \
+                   ! grep -q 'net11\.0' "$DESKTOP_A11Y_STUDIO_ROOT/src/AccessibilityStudio.Core/obj/project.assets.json" 2>/dev/null || \
                    ! grep -q 'net11\.0' "$DESKTOP_A11Y_STUDIO_ROOT/src/AccessibilityStudio.WinForms/obj/project.assets.json" 2>/dev/null; then
                     A11Y_NEEDS_RESTORE=true
                 fi
