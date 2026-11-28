@@ -876,23 +876,28 @@ function run_integrity_check() {
                 }
             }
 
-            // Part D: Immutable Zero-AI-Shorthand Sparkle Glyph Guardrail (FATAL EXIT 1)
-            // Sparkle glyphs (ph-sparkle, fa-sparkles, fa-wand-magic-sparkles, book-sparkles,
-            // fa-stars, bi-stars, lucide-sparkles, and Unicode U+2728 SPARKLES) have become
-            // universal UI shorthand for AI-generated content. RaggieSoft permanently bans them across
-            // all web properties, narratives, catalogs, deployment tools, and desktop applications!
+            // Part D & Part E: Immutable Zero-AI-Shorthand Sparkle Glyph + Unowned Brand/Domain Guardrails (FATAL EXIT 1)
+            // 1. Sparkle glyphs (ph-sparkle, fa-sparkles, fa-wand-magic-sparkles, book-sparkles,
+            //    fa-stars, bi-stars, lucide-sparkles, and Unicode U+2728 SPARKLES) have become
+            //    universal UI shorthand for AI-generated content and are permanently banned.
+            // 2. Unowned external documentation/reference domains & brands (such as learn.microsoft.com)
+            //    are banned so RaggieSoft properties always stand on first-party branding
+            //    (e.g., 'RaggieSoft Reference Portal').
             \$aiGlyphRegex = '/(?:\\bph-(?:sparkles?|magic-wand)\\b|\\bfa-(?:[a-z0-9-]+-)?sparkles?\\b|\\bfa-stars\\b|\\bbi-stars\\b|\\blucide-sparkles?\\b|\\bheroicons?-sparkles?\\b|(?:icon|iconName|name)\\s*[:=]\\s*[\\x22\\x27](?:(?:[a-z0-9-]+-)?sparkles?|stars)[\\x22\\x27]|\\x{2728})/u';
+            \$unownedBrandDomainRegex = '/(?:\\blearn\\.microsoft\\.com\\b)/i';
             \$glyphScanRoots = array_merge(
                 \$webTargets,
                 [\$narrRoot . '/books', \$narrRoot . '/backstage', \$serverRoot . '/raggiesoft-assets/engine-room-records']
             );
             \$desktopRoot = realpath('../desktop-apps');
             if (\$desktopRoot && is_dir(\$desktopRoot)) { \$glyphScanRoots[] = \$desktopRoot; }
+            \$llmsRoot = realpath('../llms');
+            if (\$llmsRoot && is_dir(\$llmsRoot)) { \$glyphScanRoots[] = \$llmsRoot; }
             \$deployToolsRoot = realpath('.');
             if (\$deployToolsRoot && is_dir(\$deployToolsRoot)) { \$glyphScanRoots[] = \$deployToolsRoot; }
 
             \$glyphSkipDirs = ['node_modules', '.git', '.venv', 'venv', 'vendor', 'fonts', 'phosphor', 'fontawesome', 'webawesome', 'bin', 'obj', 'dist', 'build', 'out', '.output', '.next', '.svelte-kit', '.ssr-temp', 'build-tools', 'raggiesoft-vaults'];
-            \$glyphAllowedExts = ['html', 'php', 'ts', 'tsx', 'js', 'mjs', 'svelte', 'astro', 'vue', 'njk', 'md', 'json', 'cs', 'xaml', 'cpp', 'hpp', 'rshp', 'rsip', 'rstp', 'rssc', 'sh', 'py', 'ps1'];
+            \$glyphAllowedExts = ['html', 'php', 'ts', 'tsx', 'js', 'mjs', 'svelte', 'astro', 'vue', 'njk', 'md', 'txt', 'json', 'cs', 'xaml', 'cpp', 'hpp', 'rshp', 'rsip', 'rstp', 'rssc', 'sh', 'py', 'ps1'];
 
             foreach (\$glyphScanRoots as \$gRoot) {
                 if (!\$gRoot || !is_dir(\$gRoot)) { continue; }
@@ -914,6 +919,11 @@ function run_integrity_check() {
                     if (preg_match(\$aiGlyphRegex, \$gTxt, \$gMatch)) {
                         \$gPathNorm = str_replace('\\\\', '/', \$gFile->getPathname());
                         echo \"❌ FATAL AI-SHORTHAND SPARKLE GLYPH FAIL: [\$gPathNorm] contains banned AI-shorthand glyph '\" . \$gMatch[0] . \"'! Replace with a domain-specific non-sparkle icon.\\n\";
+                        \$hasErrors = true;
+                    }
+                    if (preg_match(\$unownedBrandDomainRegex, \$gTxt, \$bMatch)) {
+                        \$gPathNorm = str_replace('\\\\', '/', \$gFile->getPathname());
+                        echo \"❌ FATAL UNOWNED DOMAIN / BRAND LINT FAIL: [\$gPathNorm] contains banned external domain/brand '\" . \$bMatch[0] . \"'! Use 'RaggieSoft Reference Portal' or first-party terminology instead.\\n\";
                         \$hasErrors = true;
                     }
                 }
